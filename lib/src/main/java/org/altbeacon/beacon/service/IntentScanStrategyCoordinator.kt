@@ -293,6 +293,9 @@ class IntentScanStrategyCoordinator(val context: Context) {
                         } catch (e: NullPointerException) {
                             // Needed to stop a crash caused by internal NPE thrown by Android.  See issue #636
                             LogManager.e(TAG, "NullPointerException. Cannot run backup scan", e)
+                        } catch (e: SecurityException) {
+                            // Maybe permissions are not granted?
+                            LogManager.e(TAG, "SecurityException. Cannot run backup scan", e)
                         }
                     } else {
                         LogManager.d(TAG, "Cannot get scanner")
