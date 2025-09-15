@@ -1,7 +1,7 @@
 import java.util.regex.Matcher
 
 apply plugin: 'maven-publish'
-apply plugin: 'signing'
+//apply plugin: 'signing'
 
 
 task androidSourcesJar(type: Jar) {
@@ -28,7 +28,6 @@ task renameAarForRelease(type: Copy, dependsOn: build) {
         fileName = "${project.name}-${project.version}.aar"
     }
     println "Renamed aar to ${project.name}-${project.version}.aar"
-
 }
 
 artifacts {
@@ -118,7 +117,12 @@ afterEvaluate {
     //Declare an explicit dependency on ':android-beacon-library:renameAarForRelease' from ':android-beacon-library:publishReleasePublicationToSonatypeRepository' using Task#mustRunAfter.
     publishReleasePublicationToSonatypeRepository.mustRunAfter renameAarForRelease
     //Declare an explicit dependency on ':android-beacon-library:renameAarForRelease' from ':android-beacon-library:signReleasePublication' using Task#mustRunAfter.
-    renameAarForRelease.mustRunAfter signReleasePublication
+//    renameAarForRelease.mustRunAfter signReleasePublication
+    publishReleasePublicationToMavenLocal.mustRunAfter renameAarForRelease
+
+    tasks.named("generateMetadataFileForReleasePublication") {
+        mustRunAfter(renameAarForRelease)
+    }
 }
 
 
@@ -129,9 +133,9 @@ nexusStaging {
     password = ossrhPassword
 }
 
-signing {
-    sign publishing.publications
-}
+//signing {
+//    sign publishing.publications
+//}
 
 
 task release(dependsOn: [ 'clean', 'build', 'renameAarForRelease', 'androidSourcesJar']) {
@@ -144,6 +148,10 @@ task mavenPublish(dependsOn: ['release','publishReleasePublicationToSonatypeRepo
     doLast {
         println "Publishing"
     }
+}
+
+task mavenPublishLocal(dependsOn: ['release', 'publishReleasePublicationToMavenLocal']) {
+
 }
 
 build.mustRunAfter clean
