@@ -104,8 +104,8 @@ afterEvaluate {
         }
         repositories {
             maven {
-                name = "sonatype"
-                url = "https://oss.sonatype.org/service/local/staging/deploy/maven2/"
+                name = "TP"
+                url = "https://mvn.technopartner.com.br/repository/internal"
 
                 credentials {
                     username ossrhToken
@@ -115,7 +115,7 @@ afterEvaluate {
         }
     }
     //Declare an explicit dependency on ':android-beacon-library:renameAarForRelease' from ':android-beacon-library:publishReleasePublicationToSonatypeRepository' using Task#mustRunAfter.
-    publishReleasePublicationToSonatypeRepository.mustRunAfter renameAarForRelease
+    publishReleasePublicationToTPRepository.mustRunAfter renameAarForRelease
     //Declare an explicit dependency on ':android-beacon-library:renameAarForRelease' from ':android-beacon-library:signReleasePublication' using Task#mustRunAfter.
 //    renameAarForRelease.mustRunAfter signReleasePublication
     publishReleasePublicationToMavenLocal.mustRunAfter renameAarForRelease
@@ -144,7 +144,7 @@ task release(dependsOn: [ 'clean', 'build', 'renameAarForRelease', 'androidSourc
     }
 }
 
-task mavenPublish(dependsOn: ['release','publishReleasePublicationToSonatypeRepository']) {
+task mavenPublish(dependsOn: ['release','publishReleasePublicationToTPRepository']) {
     doLast {
         println "Publishing"
     }
