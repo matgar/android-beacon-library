@@ -11,14 +11,12 @@ import android.content.pm.PackageItemInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
+import android.os.Looper
 import androidx.annotation.RequiresApi
-import org.altbeacon.beacon.Beacon
 import org.altbeacon.beacon.BeaconManager
 import org.altbeacon.beacon.Region
-import org.altbeacon.beacon.distance.ModelSpecificDistanceCalculator
 import org.altbeacon.beacon.logging.LogManager
 import java.util.*
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 class IntentScanStrategyCoordinator(val context: Context) {
@@ -28,10 +26,25 @@ class IntentScanStrategyCoordinator(val context: Context) {
     private var started = false
     private var longScanForcingEnabled = false
     private var lastCycleEnd: Long = 0
+    private var lastArrival: Long = 0
     var strategyFailureDetectionCount = 0
     var lastStrategyFailureDetectionCount = 0
     var disableOnFailure = false
     val executor = Executors.newFixedThreadPool(1)
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val scanPeriod: Long
+        get() = with(BeaconManager.getInstanceForApplication(context)) {
+            if (backgroundMode) backgroundScanPeriod else foregroundScanPeriod
+        }
+
+    private val betweenScanPeriod: Long
+        get() = with(BeaconManager.getInstanceForApplication(context)) {
+            if (backgroundMode) backgroundBetweenScanPeriod else foregroundBetweenScanPeriod
+        }
+
+    private val cyclePeriod
+        get() = scanPeriod + betweenScanPeriod
 
     fun ensureInitialized() {
         if (!initialized) {
@@ -124,7 +137,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
             }
         }
         scanHelper.startAndroidOBackgroundScan(scanState.getBeaconParsers(), ArrayList<Region>(regions))
-        lastCycleEnd = java.lang.System.currentTimeMillis()
+//        lastCycleEnd = System.currentTimeMillis()
         ScanJobScheduler.getInstance().scheduleForIntentScanStrategy(context)
     }
 
@@ -165,25 +178,49 @@ class IntentScanStrategyCoordinator(val context: Context) {
     @RequiresApi(Build.VERSION_CODES.O)
     fun processScanResults(scanResults: ArrayList<ScanResult?>) {
         ensureInitialized()
+        val now = System.currentTimeMillis()
+        LogManager.d(TAG, "Processing scan results. lastArrival: $lastArrival. Setting to $now")
+        lastArrival = now
+
+        //Should reset cycles if results are outside expected scan interval
+        val msSinceLastCycleEnd = now - lastCycleEnd
+        if (msSinceLastCycleEnd > cyclePeriod) {
+            LogManager.d(TAG, "Resetting cycle end. lastCycleEnd: $lastCycleEnd. Setting to ${now - betweenScanPeriod}")
+            lastCycleEnd = now - betweenScanPeriod
+        }
+
         for (scanResult in scanResults) {
             if (scanResult != null) {
                 //LogManager.d(TAG, "Got scan result: "+scanResult)
                 scanHelper.processScanResult(scanResult.device, scanResult.rssi, scanResult.scanRecord?.bytes, scanResult.timestampNanos/1000)
             }
         }
-        val now = java.lang.System.currentTimeMillis()
-        val beaconManager = BeaconManager.getInstanceForApplication(context)
-        var scanPeriod = beaconManager.foregroundScanPeriod
-        if (beaconManager.backgroundMode) {
-            scanPeriod = beaconManager.backgroundScanPeriod
-        }
 
-        if (now - lastCycleEnd > scanPeriod) {
+        scheduleCycleEnd()
+    }
+    private fun scheduleCycleEnd() {
+        LogManager.d(TAG, "scheduleCycleEnd")
+        val now = System.currentTimeMillis()
+
+        val msProcessingInterval = lastArrival + scanPeriod - now
+        val msNotificationInterval = lastCycleEnd + cyclePeriod - now
+
+        if (msNotificationInterval <= 0) {
             LogManager.d(TAG, "End of scan cycle");
             lastCycleEnd = now
             scanHelper.getCycledLeScanCallback().onCycleEnd()
         }
+
+        if (msProcessingInterval > 0 || msNotificationInterval > 0) {
+            val interval = lastCycleEnd + cyclePeriod - now
+            LogManager.d(TAG, "Rescheduling scan cycle end check. interval: $interval")
+            handler.removeCallbacksAndMessages(null)
+            handler.postDelayed({
+                scheduleCycleEnd()
+            }, if (interval > 1000) 1000 else interval)
+        }
     }
+
     fun performPeriodicProcessing(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             processScanResults(ArrayList<ScanResult?>())
