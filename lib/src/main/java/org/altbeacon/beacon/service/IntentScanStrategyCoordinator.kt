@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.annotation.RequiresApi
 import org.altbeacon.beacon.BeaconManager
+import org.altbeacon.beacon.BeaconParser
 import org.altbeacon.beacon.Region
 import org.altbeacon.beacon.logging.LogManager
 import java.util.*
@@ -32,6 +33,48 @@ class IntentScanStrategyCoordinator(val context: Context) {
     var disableOnFailure = false
     val executor = Executors.newFixedThreadPool(1)
     private val handler = Handler(Looper.getMainLooper())
+
+    // Dedicated single-thread executor for BLE scan control (start/stop/restart).  Kept separate
+    // from `executor`, which the backup scan can occupy for up to ~35s (sleep + detection loop).
+    // Single-thread => FIFO ordering, so start/stop never reorder and the scan ends in the
+    // requested state.  INVARIANT: every scanHelper.start/stopAndroidOBackgroundScan call inside
+    // this class MUST go through submitStartScan/submitStopScan, or that ordering guarantee breaks.
+    private val scanCommandExecutor = Executors.newSingleThreadExecutor()
+
+    @Volatile private var bleScanRunning = false
+
+    // Runs the blocking startScan IPC off the calling thread.  On Android 13+ the Bluetooth stack
+    // is a Mainline/APEX module and startScan blocks the caller on a synchronous IPC; doing it on
+    // the main thread (e.g. from Application.onCreate via bindInternal) causes startup ANRs.
+    private fun submitStartScan(parsers: Set<BeaconParser>, regions: List<Region>?) {
+        scanCommandExecutor.execute {
+            try {
+                if (bleScanRunning) {
+                    scanHelper.stopAndroidOBackgroundScan()
+                    bleScanRunning = false
+                }
+                if (regions != null) {
+                    scanHelper.startAndroidOBackgroundScan(parsers, regions)
+                } else {
+                    scanHelper.startAndroidOBackgroundScan(parsers)
+                }
+                bleScanRunning = true
+            } catch (t: Throwable) {
+                LogManager.e(TAG, "Failed to start background scan off the calling thread", t)
+            }
+        }
+    }
+
+    private fun submitStopScan() {
+        scanCommandExecutor.execute {
+            try {
+                scanHelper.stopAndroidOBackgroundScan()
+                bleScanRunning = false
+            } catch (t: Throwable) {
+                LogManager.e(TAG, "Failed to stop background scan off the calling thread", t)
+            }
+        }
+    }
 
     private val scanPeriod: Long
         get() = with(BeaconManager.getInstanceForApplication(context)) {
@@ -136,7 +179,9 @@ class IntentScanStrategyCoordinator(val context: Context) {
                 regions = wildcardRegions
             }
         }
-        scanHelper.startAndroidOBackgroundScan(scanState.getBeaconParsers(), ArrayList<Region>(regions))
+        // Defensive copy of the parser set: it is iterated/copied on the executor thread, while
+        // reinitialize() may replace/mutate scanState's set on the caller (main) thread.
+        submitStartScan(HashSet(scanState.getBeaconParsers()), ArrayList<Region>(regions))
 //        lastCycleEnd = System.currentTimeMillis()
         ScanJobScheduler.getInstance().scheduleForIntentScanStrategy(context)
     }
@@ -162,7 +207,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
     fun stop() {
         ensureInitialized()
         LogManager.d(TAG, "stopping background scan")
-        scanHelper.stopAndroidOBackgroundScan()
+        submitStopScan()
         ScanJobScheduler.getInstance().cancelSchedule(context)
         started = false
     }
@@ -171,9 +216,9 @@ class IntentScanStrategyCoordinator(val context: Context) {
     fun restartBackgroundScan() {
         ensureInitialized()
         LogManager.d(TAG, "restarting background scan")
-        scanHelper.stopAndroidOBackgroundScan()
-        // We may need to pause between these two events?
-        scanHelper.startAndroidOBackgroundScan(scanState.getBeaconParsers())
+        // submitStartScan does stop-before-start via bleScanRunning, serialized on the same
+        // single-thread executor, so the restart cannot reorder against an in-flight start.
+        submitStartScan(HashSet(scanState.getBeaconParsers()), null)
     }
     @RequiresApi(Build.VERSION_CODES.O)
     fun processScanResults(scanResults: ArrayList<ScanResult?>) {
