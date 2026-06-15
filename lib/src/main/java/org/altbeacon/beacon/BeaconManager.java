@@ -442,6 +442,7 @@ public class BeaconManager {
                 instance = sInstance;
                 if (instance == null) {
                     sInstance = instance = new BeaconManager(context);
+                    LogManager.d(TAG, "AltBeacon version %s", BuildConfig.VERSION_NAME);
                     LogManager.d(TAG, "API BeaconManager constructed ");
                 }
             }
