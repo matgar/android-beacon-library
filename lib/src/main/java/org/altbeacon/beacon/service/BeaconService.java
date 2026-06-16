@@ -36,6 +36,7 @@ import android.content.pm.PackageItemInfo;
 import android.content.pm.PackageManager;
 import android.os.Binder;
 import android.os.Build;
+import android.os.DeadSystemException;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -367,8 +368,15 @@ public class BeaconService extends Service {
                 Build.VERSION.RELEASE.contains("4.4.2") ||
                 Build.VERSION.RELEASE.contains("4.4.3")) {
             AlarmManager alarmManager = (AlarmManager) getApplicationContext().getSystemService(Context.ALARM_SERVICE);
-            alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, getRestartIntent());
-            LogManager.d(TAG, "Setting a wakeup alarm to go off due to Android 4.4.2 service restarting bug.");
+            try {
+                alarmManager.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, getRestartIntent());
+                LogManager.d(TAG, "Setting a wakeup alarm to go off due to Android 4.4.2 service restarting bug.");
+            } catch (RuntimeException e) {
+                // system_server died (RuntimeException wrapping DeadSystemException): the device is
+                // restarting, not an app fault.  Swallow only this case; let real bugs propagate.
+                if (!(e.getCause() instanceof DeadSystemException)) throw e;
+                LogManager.w(TAG, "Could not set restart alarm: system_server is dead. Skipping.");
+            }
         }
     }
 

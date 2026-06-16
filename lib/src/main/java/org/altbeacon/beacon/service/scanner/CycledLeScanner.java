@@ -12,6 +12,7 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.DeadSystemException;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.Looper;
@@ -451,10 +452,30 @@ public abstract class CycledLeScanner {
         if (milliseconds < mScanPeriod) {
             milliseconds = mScanPeriod;
         }
+        if (setWakeUpAlarmAt(SystemClock.elapsedRealtime() + milliseconds)) {
+            LogManager.d(TAG, "Set a wakeup alarm to go off in %s ms: %s", milliseconds, getWakeUpOperation());
+            cancelAlarmOnUserSwitch();
+        }
+    }
+
+    /**
+     * Sets the wakeup alarm, swallowing ONLY the system_server-died case (a RuntimeException
+     * wrapping a DeadSystemException).  That means the device is restarting, not an app fault,
+     * so there is nothing we can do here.  Every other RuntimeException (real bugs) propagates.
+     * @return true if the alarm was set; false if it was skipped because the system is dead.
+     */
+    private boolean setWakeUpAlarmAt(long triggerAtMillis) {
         AlarmManager alarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
-        alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + milliseconds, getWakeUpOperation());
-        LogManager.d(TAG, "Set a wakeup alarm to go off in %s ms: %s", milliseconds, getWakeUpOperation());
-        cancelAlarmOnUserSwitch();
+        try {
+            alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, getWakeUpOperation());
+            return true;
+        } catch (RuntimeException e) {
+            if (e.getCause() instanceof DeadSystemException) {
+                LogManager.w(TAG, "Could not set wakeup alarm: system_server is dead (device restarting). Skipping.");
+                return false;
+            }
+            throw e;
+        }
     }
 
     // Added to prevent crash on switching users.  See #876
@@ -500,9 +521,9 @@ public abstract class CycledLeScanner {
         // future.  This is to get around a limit on 500 alarms you can start per app on Samsung
         // devices.
         long milliseconds = Long.MAX_VALUE; // 2.9 million years from now
-        AlarmManager alarmManager = (AlarmManager) mContext.getSystemService(Context.ALARM_SERVICE);
-        alarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, milliseconds, getWakeUpOperation());
-        LogManager.d(TAG, "Set a wakeup alarm to go off in %s ms: %s", milliseconds - SystemClock.elapsedRealtime(), getWakeUpOperation());
+        if (setWakeUpAlarmAt(milliseconds)) {
+            LogManager.d(TAG, "Set a wakeup alarm to go off in %s ms: %s", milliseconds - SystemClock.elapsedRealtime(), getWakeUpOperation());
+        }
 
     }
 
