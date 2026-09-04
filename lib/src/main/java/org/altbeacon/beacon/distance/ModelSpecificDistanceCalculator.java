@@ -142,7 +142,12 @@ public class ModelSpecificDistanceCalculator implements DistanceCalculator {
 
     private void loadModelMap() {
         boolean mapLoaded = false;
-        if (mRemoteUpdateUrlString != null) {
+        // Settings.Defaults.distanceModelUpdateUrl is "" and is documented there as disabled, but
+        // an empty string is not null. Without this check the remote fetch runs on every install
+        // that has no stored map yet — on the calling thread, reached from applyChangesToServices
+        // while ranging starts. It is also wasted work: loadDefaultModelMap() below already covers
+        // the case, so the download changes nothing for callers that never configured a URL.
+        if (mRemoteUpdateUrlString != null && !mRemoteUpdateUrlString.isEmpty()) {
             mapLoaded = loadModelMapFromStorage();
             // We only want to try to download an update from the server the first time the app is
             // run.  If we successfully download an update it gets saved to a file, so if the file
