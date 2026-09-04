@@ -40,6 +40,13 @@ public class MonitoringStatus {
     private boolean mStatePreservationIsOn = true;
 
     /**
+     * Resolved once and reused. See {@link #statusPreservationFile()}.
+     */
+    private volatile File mStatusPreservationFile;
+
+    private final Object mStatusPreservationFileLock = new Object();
+
+    /**
      * Private lock object for singleton initialization protecting against denial-of-service attack.
      */
     private static final Object SINGLETON_LOCK = new Object();
@@ -270,14 +277,40 @@ public class MonitoringStatus {
         }
     }
 
+    /**
+     * Context.getFileStreamPath() goes through ContextImpl.getFilesDir(), which is
+     * synchronized on a lock shared by the whole process. Anything else holding it — another
+     * library creating a directory, for instance — blocks every caller until it is done.
+     *
+     * updateMonitoringStatusTime() is called once per scan cycle, so with the intent scan
+     * strategy that lock is taken about once a second on the main thread, for the lifetime of
+     * the scan. It showed up as 88 ANR reports in a host app's Play vitals, all of them with
+     * the main thread Blocked in getFilesDir while a React Native thread held the lock.
+     *
+     * The path never changes while the process lives, so resolving it once is enough.
+     */
+    private File statusPreservationFile() {
+        File file = mStatusPreservationFile;
+
+        if (file == null) {
+            synchronized (mStatusPreservationFileLock) {
+                file = mStatusPreservationFile;
+                if (file == null) {
+                    file = mContext.getFileStreamPath(STATUS_PRESERVATION_FILE_NAME);
+                    mStatusPreservationFile = file;
+                }
+            }
+        }
+
+        return file;
+    }
+
     protected void updateMonitoringStatusTime(long time) {
-        File file = mContext.getFileStreamPath(STATUS_PRESERVATION_FILE_NAME);
-        file.setLastModified(time);
+        statusPreservationFile().setLastModified(time);
     }
 
     protected long getLastMonitoringStatusUpdateTime() {
-        File file = mContext.getFileStreamPath(STATUS_PRESERVATION_FILE_NAME);
-        return file.lastModified();
+        return statusPreservationFile().lastModified();
     }
 
     protected void restoreMonitoringStatus() {
