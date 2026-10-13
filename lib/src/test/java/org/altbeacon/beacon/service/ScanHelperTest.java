@@ -17,11 +17,15 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
@@ -88,10 +92,26 @@ public class ScanHelperTest {
         return new HashSet<>(Arrays.asList(uidParser));
     }
 
-    ScanHelper getScanHelperReloadedWith(Set<BeaconParser> parsers) {
+    /**
+     * Parsers compared by identifier and layout: BeaconParser.hashCode() covers array fields by
+     * identity, so equal parsers built separately do not compare equal inside a HashSet.
+     */
+    Set<String> describe(Set<BeaconParser> parsers) {
+        Set<String> descriptions = new HashSet<>();
+        for (BeaconParser parser : parsers) {
+            descriptions.add(parser.getIdentifier() + "~" + parser.getLayout());
+        }
+        return descriptions;
+    }
+
+    void register(Set<BeaconParser> parsers) {
         List<BeaconParser> registered = BeaconManager.getInstanceForApplication(context).getBeaconParsers();
         registered.clear();
         registered.addAll(parsers);
+    }
+
+    ScanHelper getScanHelperReloadedWith(Set<BeaconParser> parsers) {
+        register(parsers);
         ScanHelper scanHelper = new ScanHelper(context);
         scanHelper.reloadParsers();
         return scanHelper;
@@ -164,5 +184,66 @@ public class ScanHelperTest {
         scanHelper.setBeaconParsers(getExtraFrameParsers());
         assertTrue("should use the tracker again when an extra frame parser comes back",
                 scanHelper.needsExtraDataTracking(getServiceUuidBeacon()));
+    }
+
+    @Test
+    public void reconcileReplacesRestoredParsersWithRegisteredOnes() {
+        ScanHelper scanHelper = new ScanHelper(context);
+        scanHelper.setBeaconParsers(Collections.<BeaconParser>emptySet());
+        register(getSingleFrameParsers());
+        scanHelper.reconcileParsers();
+        assertEquals("the parser set should be the registered one",
+                describe(getSingleFrameParsers()), describe(scanHelper.getBeaconParsers()));
+    }
+
+    @Test
+    public void reconcileReplacesParserWithOutdatedLayout() {
+        ScanHelper scanHelper = new ScanHelper(context);
+        scanHelper.setBeaconParsers(new HashSet<>(Arrays.asList(
+                new BeaconParser("service").setBeaconLayout("s:0-1=f2ff,i:2-21v,p:--59"))));
+        register(new HashSet<>(Arrays.asList(
+                new BeaconParser("service").setBeaconLayout(SERVICE_DATA_LAYOUT))));
+        scanHelper.reconcileParsers();
+        Set<BeaconParser> parsers = scanHelper.getBeaconParsers();
+        assertEquals("the outdated parser should be replaced, not kept alongside", 1, parsers.size());
+        assertEquals("the remaining parser should have the registered layout", SERVICE_DATA_LAYOUT,
+                parsers.iterator().next().getLayout());
+    }
+
+    @Test
+    public void reconcileKeepsExtraDataBeaconTracker() {
+        ScanHelper scanHelper = new ScanHelper(context);
+        ExtraDataBeaconTracker tracker = new ExtraDataBeaconTracker();
+        scanHelper.setExtraDataBeaconTracker(tracker);
+        register(getExtraFrameParsers());
+        scanHelper.reconcileParsers();
+        assertSame("reconciling should keep the tracker and the frames it merged", tracker,
+                scanHelper.getExtraDataBeaconTracker());
+        scanHelper.reloadParsers();
+        assertNotSame("reloading should still start a new tracker", tracker,
+                scanHelper.getExtraDataBeaconTracker());
+    }
+
+    @Test
+    public void reconcileFlattensExtraDataParsersAndUpdatesTrackerDecision() {
+        ScanHelper scanHelper = new ScanHelper(context);
+        scanHelper.setBeaconParsers(getSingleFrameParsers());
+        register(getParsersWithExtraDataParser());
+        scanHelper.reconcileParsers();
+        assertEquals("the extra data parser should be flattened into the set", 2,
+                scanHelper.getBeaconParsers().size());
+        assertTrue("a service uuid beacon should use the tracker once a multi-frame parser is registered",
+                scanHelper.needsExtraDataTracking(getServiceUuidBeacon()));
+    }
+
+    @Test
+    public void reconcileIsIdempotent() {
+        ScanHelper scanHelper = new ScanHelper(context);
+        register(getParsersWithExtraDataParser());
+        scanHelper.reconcileParsers();
+        Set<BeaconParser> first = new HashSet<>(scanHelper.getBeaconParsers());
+        scanHelper.reconcileParsers();
+        assertEquals("reconciling again should not change the parser set", first,
+                scanHelper.getBeaconParsers());
     }
 }

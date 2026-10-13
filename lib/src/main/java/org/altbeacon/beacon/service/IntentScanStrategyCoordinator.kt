@@ -223,6 +223,11 @@ class IntentScanStrategyCoordinator(val context: Context) {
     @RequiresApi(Build.VERSION_CODES.O)
     fun processScanResults(scanResults: ArrayList<ScanResult?>) {
         ensureInitialized()
+        // The parser set restored from ScanState is whatever was persisted last: empty if the
+        // restore failed, or older than the set the app registers at runtime. Reconcile with the
+        // registered set so decoding does not depend on which entry point initialized this
+        // coordinator. Only the parsers are replaced; the extra data beacon tracker is kept.
+        scanHelper.reconcileParsers()
         val now = System.currentTimeMillis()
         LogManager.d(TAG, "Processing scan results. lastArrival: $lastArrival. Setting to $now")
         lastArrival = now

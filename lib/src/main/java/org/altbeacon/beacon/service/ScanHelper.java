@@ -116,6 +116,17 @@ class ScanHelper {
         terminateThreads();
     }
 
+    @VisibleForTesting
+    Set<BeaconParser> getBeaconParsers() {
+        return mBeaconParsers;
+    }
+
+    @VisibleForTesting
+    @NonNull
+    ExtraDataBeaconTracker getExtraDataBeaconTracker() {
+        return mExtraDataBeaconTracker;
+    }
+
     @Nullable CycledLeScanner getCycledScanner() {
         return mCycledScanner;
     }
@@ -178,25 +189,36 @@ class ScanHelper {
     }
 
     void reloadParsers() {
-        HashSet<BeaconParser> newBeaconParsers = new HashSet<>();
-        //flatMap all beacon parsers
         boolean matchBeaconsByServiceUUID = true;
-        newBeaconParsers.addAll(mBeaconManager.getBeaconParsers());
         for (BeaconParser beaconParser : mBeaconManager.getBeaconParsers()) {
             if (beaconParser.getExtraDataParsers().size() > 0) {
                 matchBeaconsByServiceUUID = false;
-                newBeaconParsers.addAll(beaconParser.getExtraDataParsers());
             }
         }
-        mBeaconParsers = newBeaconParsers;
-        mAnyMultiFrameParsers = anyMultiFrameParsers(newBeaconParsers);
+        reconcileParsers();
         //initialize the extra data beacon tracker
         mExtraDataBeaconTracker = new ExtraDataBeaconTracker(matchBeaconsByServiceUUID);
     }
 
+    /**
+     * Replaces the parser set with the parsers registered with the BeaconManager, flattening their
+     * extra data parsers into it. Unlike {@link #reloadParsers()}, keeps the extra data beacon
+     * tracker, along with the frames it has merged so far.
+     */
+    void reconcileParsers() {
+        HashSet<BeaconParser> newBeaconParsers = new HashSet<>();
+        //flatMap all beacon parsers
+        for (BeaconParser beaconParser : mBeaconManager.getBeaconParsers()) {
+            newBeaconParsers.add(beaconParser);
+            newBeaconParsers.addAll(beaconParser.getExtraDataParsers());
+        }
+        mBeaconParsers = newBeaconParsers;
+        mAnyMultiFrameParsers = anyMultiFrameParsers(newBeaconParsers);
+    }
+
     private static boolean anyMultiFrameParsers(Collection<BeaconParser> beaconParsers) {
         for (BeaconParser beaconParser : beaconParsers) {
-            // Extra data parsers are only flattened into the set by reloadParsers, so a set
+            // Extra data parsers are only flattened into the set by reconcileParsers, so a set
             // restored from ScanState may carry them only inside their main parser.
             if (beaconParser.isExtraFrame() || beaconParser.getExtraDataParsers().size() > 0) {
                 return true;
