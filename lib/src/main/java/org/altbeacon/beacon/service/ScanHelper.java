@@ -19,6 +19,7 @@ import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 
 import org.altbeacon.beacon.Beacon;
@@ -71,6 +72,9 @@ class ScanHelper {
     private ExtraDataBeaconTracker mExtraDataBeaconTracker = new ExtraDataBeaconTracker();
 
     private Set<BeaconParser> mBeaconParsers  = new HashSet<>();
+    // Whether any parser in mBeaconParsers takes part in multi-frame beacons. Without one, the
+    // extra data beacon tracker has nothing to merge.
+    private boolean mAnyMultiFrameParsers = false;
     private List<Beacon> mSimulatedScanData = null;
     private Context mContext;
 
@@ -146,6 +150,7 @@ class ScanHelper {
             Log.d(TAG, "First parser layout: "+beaconParsers.iterator().next().getLayout());
         }
         mBeaconParsers = beaconParsers;
+        mAnyMultiFrameParsers = anyMultiFrameParsers(beaconParsers);
     }
 
     void setSimulatedScanData(List<Beacon> simulatedScanData) {
@@ -184,8 +189,31 @@ class ScanHelper {
             }
         }
         mBeaconParsers = newBeaconParsers;
+        mAnyMultiFrameParsers = anyMultiFrameParsers(newBeaconParsers);
         //initialize the extra data beacon tracker
         mExtraDataBeaconTracker = new ExtraDataBeaconTracker(matchBeaconsByServiceUUID);
+    }
+
+    private static boolean anyMultiFrameParsers(Collection<BeaconParser> beaconParsers) {
+        for (BeaconParser beaconParser : beaconParsers) {
+            // Extra data parsers are only flattened into the set by reloadParsers, so a set
+            // restored from ScanState may carry them only inside their main parser.
+            if (beaconParser.isExtraFrame() || beaconParser.getExtraDataParsers().size() > 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The extra data beacon tracker merges frames of multi-frame beacons. A beacon goes through it
+     * when it declares itself multi-frame, or when a registered parser takes part in multi-frame
+     * beacons and the tracker may still match frames by service UUID. With no such parser, a
+     * beacon that merely has a service UUID has nothing to be merged with.
+     */
+    @VisibleForTesting
+    boolean needsExtraDataTracking(@NonNull Beacon beacon) {
+        return beacon.isMultiFrameBeacon() || mAnyMultiFrameParsers;
     }
 
     @RequiresApi(api = Build.VERSION_CODES.O)
@@ -343,7 +371,9 @@ class ScanHelper {
                     "beacon detected : %s", beacon.toString());
         }
 
-        beacon = mExtraDataBeaconTracker.track(beacon);
+        if (needsExtraDataTracking(beacon)) {
+            beacon = mExtraDataBeaconTracker.track(beacon);
+        }
         // If this is a Gatt beacon that should be ignored, it will be set to null as a result of
         // the above
         if (beacon == null) {
