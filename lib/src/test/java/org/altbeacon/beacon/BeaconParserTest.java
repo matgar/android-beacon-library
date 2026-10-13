@@ -11,8 +11,10 @@ import java.util.Arrays;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 
 @Config(sdk = 28)
 
@@ -354,5 +356,25 @@ public class BeaconParserTest {
         assertEquals("parsed beacon should contain a valid data on index 1", Long.valueOf(1234L), parsedBeacon.getDataFields().get(1));
         assertEquals("parsed beacon should contain a valid data on index 2", Long.valueOf(9876L), parsedBeacon.getDataFields().get(2));
 
+    }
+
+    @Test
+    public void testIsExtraFrameForLayoutWithExtraFrameTerm() {
+        BeaconParser parser = new BeaconParser().setBeaconLayout(BeaconParser.EDDYSTONE_TLM_LAYOUT);
+        assertTrue("a layout starting with the x term should be an extra frame", parser.isExtraFrame());
+    }
+
+    @Test
+    public void testIsNotExtraFrameForLayoutWithoutExtraFrameTerm() {
+        BeaconParser uidParser = new BeaconParser().setBeaconLayout(BeaconParser.EDDYSTONE_UID_LAYOUT);
+        BeaconParser altBeaconParser = new AltBeaconParser();
+        assertFalse("a service uuid layout without the x term should not be an extra frame", uidParser.isExtraFrame());
+        assertFalse("a manufacturer layout without the x term should not be an extra frame", altBeaconParser.isExtraFrame());
+    }
+
+    @Test
+    public void testIsNotExtraFrameWithoutLayout() {
+        BeaconParser parser = new BeaconParser();
+        assertFalse("a parser without a layout should not be an extra frame", parser.isExtraFrame());
     }
 }

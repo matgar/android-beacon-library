@@ -329,6 +329,18 @@ public class BeaconParser implements Serializable {
     }
 
     /**
+     * Indicates whether this parser describes a secondary ("extra") advertisement frame, declared
+     * with the "x" term in the beacon layout.
+     *
+     * @see #setBeaconLayout
+     * @see #addExtraDataParser
+     * @return true if the layout of this parser starts with the "x" term
+     */
+    public boolean isExtraFrame() {
+        return mExtraFrame != null && mExtraFrame;
+    }
+
+    /**
      * Gets an optional identifier field that may be used to identify this parser.  If set, it will
      * be passed along to any beacons decoded with this parser.
      * @return
