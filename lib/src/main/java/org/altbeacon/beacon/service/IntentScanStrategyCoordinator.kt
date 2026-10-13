@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.annotation.RequiresApi
+import androidx.annotation.VisibleForTesting
 import org.altbeacon.beacon.BeaconManager
 import org.altbeacon.beacon.BeaconParser
 import org.altbeacon.beacon.Region
@@ -153,35 +154,11 @@ class IntentScanStrategyCoordinator(val context: Context) {
         beaconManager.setScannerInSameProcess(true)
         scanHelper.reloadParsers()
         LogManager.d(TAG, "starting background scan")
-        var regions = HashSet<Region>()
-        var wildcardRegions = HashSet<Region>()
-        for (region in beaconManager.rangedRegions) {
-            if (region.identifiers.size == 0) {
-                wildcardRegions.add(region)
-            }
-            else {
-                regions.add(region)
-            }
-        }
-        for (region in beaconManager.monitoredRegions) {
-            if (region.identifiers.size == 0) {
-                wildcardRegions.add(region)
-            }
-            else {
-                regions.add(region)
-            }
-        }
-        if (wildcardRegions.size > 0) {
-            if (regions.size > 0) {
-                LogManager.w(TAG, "Wildcard regions are being used for beacon ranging or monitoring.  The wildcard regions are ignored with intent scan strategy active.")
-            }
-            else {
-                regions = wildcardRegions
-            }
-        }
-        // Defensive copy of the parser set: it is iterated/copied on the executor thread, while
-        // reinitialize() may replace/mutate scanState's set on the caller (main) thread.
-        submitStartScan(HashSet(scanState.getBeaconParsers()), ArrayList<Region>(regions))
+        // Filters come from the registered parsers rather than from scanState's, which are empty
+        // after a failed restore and stale until applySettings() saves the registered ones. The
+        // copy also keeps the set iterated on the executor thread apart from the caller's.
+        submitStartScan(HashSet(beaconManager.beaconParsers),
+                regionsForScanFilters(beaconManager.rangedRegions, beaconManager.monitoredRegions))
 //        lastCycleEnd = System.currentTimeMillis()
         ScanJobScheduler.getInstance().scheduleForIntentScanStrategy(context)
     }
@@ -402,5 +379,35 @@ class IntentScanStrategyCoordinator(val context: Context) {
 
     companion object {
         val TAG = "IntentScanCoord"
+
+        /**
+         * The regions to build scan filters for, or null to build them from the beacon parsers
+         * alone. An empty list must never be returned: ScanFilterUtils builds filters per region,
+         * so it would yield no filters at all and an unfiltered scan, which Android blocks while
+         * the screen is off.
+         */
+        @JvmStatic
+        @VisibleForTesting
+        fun regionsForScanFilters(rangedRegions: Collection<Region>, monitoredRegions: Collection<Region>): List<Region>? {
+            var regions = HashSet<Region>()
+            val wildcardRegions = HashSet<Region>()
+            for (region in rangedRegions + monitoredRegions) {
+                if (region.identifiers.size == 0) {
+                    wildcardRegions.add(region)
+                }
+                else {
+                    regions.add(region)
+                }
+            }
+            if (wildcardRegions.size > 0) {
+                if (regions.size > 0) {
+                    LogManager.w(TAG, "Wildcard regions are being used for beacon ranging or monitoring.  The wildcard regions are ignored with intent scan strategy active.")
+                }
+                else {
+                    regions = wildcardRegions
+                }
+            }
+            return if (regions.isEmpty()) null else ArrayList(regions)
+        }
     }
 }

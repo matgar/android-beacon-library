@@ -8,6 +8,7 @@ import org.altbeacon.beacon.AltBeaconParser;
 import org.altbeacon.beacon.BeaconManager;
 import org.altbeacon.beacon.BeaconParser;
 import org.altbeacon.beacon.Identifier;
+import org.altbeacon.beacon.Region;
 import org.altbeacon.beacon.service.scanner.ScanFilterUtils;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -18,6 +19,8 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import static org.junit.Assert.assertArrayEquals;
@@ -116,4 +119,16 @@ public class ScanFilterUtilsTest {
         assertArrayEquals("filter should be right", new byte[] {(byte)0x02, (byte)0x15, (byte)0x2F, (byte)0x23, (byte)0x44, (byte)0x54, (byte)0xCF, (byte)0x6D, (byte)0x4A, (byte)0x0F, (byte)0xAD, (byte)0xF2, (byte)0xF4, (byte)0x91, (byte)0x1B, (byte)0xA9, (byte)0xFF, (byte)0xA6, (byte)0x01, (byte)0x02, (byte)0x03, (byte)0x04}, sfd.filter);
     }
 
+    @Test
+    public void testScanFiltersForNoRegionsAndForEmptyRegionList() throws Exception {
+        org.robolectric.shadows.ShadowLog.stream = System.err;
+        List<BeaconParser> parsers = Arrays.asList(new AltBeaconParser(),
+                new BeaconParser().setBeaconLayout(BeaconParser.EDDYSTONE_UID_LAYOUT));
+        List<ScanFilter> parserFilters = new ScanFilterUtils().createScanFiltersForBeaconParsers(parsers, null);
+        List<ScanFilter> emptyRegionFilters = new ScanFilterUtils().createScanFiltersForBeaconParsers(parsers,
+                Collections.<Region>emptyList());
+        assertEquals("null regions should give one filter per parser", 2, parserFilters.size());
+        assertEquals("an empty region list gives no filters, which means an unfiltered scan", 0,
+                emptyRegionFilters.size());
+    }
 }
