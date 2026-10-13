@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.SystemClock;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 import org.altbeacon.beacon.Beacon;
 import org.altbeacon.beacon.BeaconManager;
@@ -221,6 +222,15 @@ public class ScanJob extends JobService {
 
             IntentScanStrategyCoordinator intentStrategyCoord = BeaconManager.getInstanceForApplication(ScanJob.this).getIntentScanStrategyCoordinator();
             if (intentStrategyCoord != null) {
+                // This job may have started its own cycled scan before the coordinator existed,
+                // as when it ran first in a process woken from cold. Stop that scan, or it keeps
+                // running alongside the coordinator until the process dies. The Android O
+                // background scan is left alone: it shares its PendingIntent with the coordinator.
+                mInitialized = false;
+                stopCycledScanning(mScanHelper);
+                if (mScanHelper != null) {
+                    mScanHelper.terminateThreads();
+                }
                 LogManager.d(TAG, "ScanJob completed for intent scan strategy.");
                 return false;
             }
@@ -240,12 +250,21 @@ public class ScanJob extends JobService {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 mScanHelper.stopAndroidOBackgroundScan();
             }
-            if (mScanHelper.getCycledScanner() != null) {
-                mScanHelper.getCycledScanner().stop();
-                mScanHelper.getCycledScanner().destroy();
-            }
+            stopCycledScanning(mScanHelper);
         }
         LogManager.d(TAG, "Scanning stopped");
+    }
+
+    /**
+     * Stops the cycled scan run by the given scan helper, and nothing else: unlike
+     * {@link #stopScanning()}, it leaves the Android O background scan running.
+     */
+    @VisibleForTesting
+    static void stopCycledScanning(@Nullable ScanHelper scanHelper) {
+        if (scanHelper != null && scanHelper.getCycledScanner() != null) {
+            scanHelper.getCycledScanner().stop();
+            scanHelper.getCycledScanner().destroy();
+        }
     }
 
     // Returns false if ScanHelper cannot be initialized
