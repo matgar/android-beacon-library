@@ -70,13 +70,24 @@ public class RangeState implements Serializable {
 
     // returns a list of beacons that are tracked, and then removes any from the list that should not
     // be there for the next cycle
+    //
+    // Iterates entries rather than looking each key up again, because Beacon.hashCode() is not
+    // stable for the lifetime of an entry: it includes the bluetooth address only while
+    // Beacon.setHardwareEqualityEnforced(true) is in effect, and that is a static setting an app
+    // may turn on at any point. A lookup made after it changed hashes the key into a different
+    // bucket and returns null for every entry, which silently dropped the whole cycle's ranging
+    // data and then replaced the map with an empty one, discarding the measurements as well. An
+    // app that enables hardware equality while ranging is already under way -- a process woken by
+    // the scan PendingIntent, where the ScanJob decodes a batch before the app has configured the
+    // library -- lost that batch entirely.
     public synchronized Collection<Beacon> finalizeBeacons() {
         Map<Beacon,RangedBeacon> newRangedBeacons = new HashMap<Beacon,RangedBeacon>();
         ArrayList<Beacon> finalizedBeacons = new ArrayList<Beacon>();
 
         synchronized (mRangedBeacons) {
-            for (Beacon beacon : mRangedBeacons.keySet()) {
-                RangedBeacon rangedBeacon = mRangedBeacons.get(beacon);
+            for (Map.Entry<Beacon,RangedBeacon> entry : mRangedBeacons.entrySet()) {
+                Beacon beacon = entry.getKey();
+                RangedBeacon rangedBeacon = entry.getValue();
                 if (rangedBeacon != null) {
                     if (rangedBeacon.isTracked()) {
                         rangedBeacon.commitMeasurements(); // calculates accuracy
