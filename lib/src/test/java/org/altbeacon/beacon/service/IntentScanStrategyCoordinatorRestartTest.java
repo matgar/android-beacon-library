@@ -20,7 +20,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
 import static org.robolectric.Shadows.shadowOf;
 
 /**
@@ -64,6 +67,32 @@ public class IntentScanStrategyCoordinatorRestartTest {
 
         assertSame("the running scan should be neither stopped nor replaced",
                 running, onlyPendingIntentScan());
+    }
+
+    @Test
+    public void periodicJobRestartsTheScanWithFilters() throws Exception {
+        coordinator.start();
+        drainScanCommands();
+        ShadowBluetoothLeScanner.ScanParams first = onlyPendingIntentScan();
+
+        coordinator.performPeriodicProcessing(context);
+        drainScanCommands();
+        // The backup scan that the periodic job also starts waits 5 s: let it find Bluetooth off,
+        // or it would wait for a detection forever with Robolectric's clocks standing still.
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_OFF);
+
+        ShadowBluetoothLeScanner.ScanParams restarted = onlyPendingIntentScan();
+        assertNotSame("the scan should have been registered again", first, restarted);
+        assertFalse("the restarted scan should be filtered", restarted.scanFilters().isEmpty());
+        coordinator.getExecutor().shutdown();
+        coordinator.getExecutor().awaitTermination(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void periodicJobDoesNotStartTheScanBeforeStart() throws Exception {
+        coordinator.performPeriodicProcessing(context);
+        drainScanCommands();
+        assertTrue("no scan PendingIntent should be registered", pendingIntentScans().isEmpty());
     }
 
     /** Waits for the scan start and stop commands submitted so far to run. */

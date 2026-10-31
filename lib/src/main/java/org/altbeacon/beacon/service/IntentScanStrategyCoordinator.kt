@@ -175,13 +175,22 @@ class IntentScanStrategyCoordinator(val context: Context) {
         beaconManager.setScannerInSameProcess(true)
         scanHelper.reloadParsers()
         LogManager.d(TAG, "starting background scan")
+        submitStartScanForRegisteredSetup()
+//        lastCycleEnd = System.currentTimeMillis()
+        ScanJobScheduler.getInstance().scheduleForIntentScanStrategy(context)
+    }
+
+    /**
+     * Starts the PendingIntent scan, stopping a running one first, for the parsers and regions
+     * registered with the BeaconManager.
+     */
+    private fun submitStartScanForRegisteredSetup() {
+        val beaconManager = BeaconManager.getInstanceForApplication(context)
         // Filters come from the registered parsers rather than from scanState's, which are empty
         // after a failed restore and stale until applySettings() saves the registered ones. The
         // copy also keeps the set iterated on the executor thread apart from the caller's.
         submitStartScan(HashSet(beaconManager.beaconParsers),
                 regionsForScanFilters(beaconManager.rangedRegions, beaconManager.monitoredRegions))
-//        lastCycleEnd = System.currentTimeMillis()
-        ScanJobScheduler.getInstance().scheduleForIntentScanStrategy(context)
     }
 
     private fun getManifestMetadataValue(key: String): String? {
@@ -289,6 +298,15 @@ class IntentScanStrategyCoordinator(val context: Context) {
     fun performPeriodicProcessing(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             processScanResults(ArrayList<ScanResult?>())
+            if (started) {
+                // Nothing reports whether the PendingIntent scan is alive: it may have failed to
+                // start (no free scanner slot, a permission granted only later) or died with
+                // Bluetooth, and only start() and applySettings() would start it again, which a
+                // process in the background may not see for hours. Restart it on every periodic
+                // job, so that it is back within one job interval at worst.
+                LogManager.d(TAG, "restarting background scan from the periodic job")
+                submitStartScanForRegisteredSetup()
+            }
             // Use this opportunity to run a brief scan without a filter to see if we are able to
             // detect something without a filter.  This would be an indication that the filtered
             // scan used in this strategy won't work
