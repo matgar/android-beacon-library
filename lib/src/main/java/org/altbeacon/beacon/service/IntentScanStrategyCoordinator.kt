@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
 import org.altbeacon.beacon.BeaconManager
@@ -27,6 +28,8 @@ class IntentScanStrategyCoordinator(val context: Context) {
     private var initialized = false
     private var started = false
     private var longScanForcingEnabled = false
+    // Cycle bookkeeping is kept in SystemClock.elapsedRealtime(), which neither jumps when the
+    // wall clock is adjusted nor stops while the CPU sleeps.
     private var lastCycleEnd: Long = 0
     private var lastArrival: Long = 0
     var strategyFailureDetectionCount = 0
@@ -205,7 +208,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
         // registered set so decoding does not depend on which entry point initialized this
         // coordinator. Only the parsers are replaced; the extra data beacon tracker is kept.
         scanHelper.reconcileParsers()
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
         LogManager.d(TAG, "Processing scan results. lastArrival: $lastArrival. Setting to $now")
         lastArrival = now
 
@@ -227,7 +230,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
     }
     private fun scheduleCycleEnd() {
         LogManager.d(TAG, "scheduleCycleEnd")
-        val now = System.currentTimeMillis()
+        val now = SystemClock.elapsedRealtime()
 
         val msProcessingInterval = lastArrival + scanPeriod - now
         val msNotificationInterval = lastCycleEnd + cyclePeriod - now
