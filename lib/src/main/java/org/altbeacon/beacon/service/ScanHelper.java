@@ -95,6 +95,25 @@ class ScanHelper {
         return mExecutor;
     }
 
+    /**
+     * Waits for the scan results handed to {@link #processScanResult} so far to be processed, then
+     * lets the processing threads go. Returns false if they did not finish within the timeout.
+     */
+    boolean awaitScanProcessing(long timeoutMillis) {
+        if (mExecutor == null) {
+            return true;
+        }
+        mExecutor.shutdown();
+        try {
+            return mExecutor.awaitTermination(timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } finally {
+            mExecutor = null;
+        }
+    }
+
     void terminateThreads() {
         if (mExecutor != null) {
             mExecutor.shutdown();

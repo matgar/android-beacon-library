@@ -212,12 +212,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
         LogManager.d(TAG, "Processing scan results. lastArrival: $lastArrival. Setting to $now")
         lastArrival = now
 
-        //Should reset cycles if results are outside expected scan interval
-        val msSinceLastCycleEnd = now - lastCycleEnd
-        if (msSinceLastCycleEnd > cyclePeriod) {
-            LogManager.d(TAG, "Resetting cycle end. lastCycleEnd: $lastCycleEnd. Setting to ${now - betweenScanPeriod}")
-            lastCycleEnd = now - betweenScanPeriod
-        }
+        val cycleOverdue = now - lastCycleEnd > cyclePeriod
 
         for (scanResult in scanResults) {
             if (scanResult != null) {
@@ -226,8 +221,32 @@ class IntentScanStrategyCoordinator(val context: Context) {
             }
         }
 
+        // Close an overdue cycle now, with this batch in it, rather than leaving it to the handler.
+        // The handler counts uptime, which stops while the CPU sleeps, and nothing holds the CPU
+        // awake once the broadcast receiver or the scan job returns. With the screen off and
+        // broadcasts further apart than a cycle, the CPU sleeps between them, so a deferred cycle
+        // end never ran: results kept arriving and no ranging callback fired for as long as the
+        // CPU slept. This also lets the periodic scan job close the cycle before it finishes.
+        //
+        // processScanResult only hands each result to the processing threads, so wait for them
+        // first, or the cycle closes before this batch reaches the range state: the batch would
+        // then be reported a broadcast late, or never if the process is killed before the next
+        // cycle end. Waiting inside the receiver is what keeps the process running meanwhile.
+        if (cycleOverdue) {
+            if (!scanHelper.awaitScanProcessing(SCAN_PROCESSING_TIMEOUT_MILLIS)) {
+                LogManager.w(TAG, "Closing an overdue scan cycle before all of its results were processed")
+            }
+            endCycle(now)
+        }
         scheduleCycleEnd()
     }
+
+    private fun endCycle(now: Long) {
+        LogManager.d(TAG, "End of scan cycle")
+        lastCycleEnd = now
+        scanHelper.getCycledLeScanCallback().onCycleEnd()
+    }
+
     private fun scheduleCycleEnd() {
         LogManager.d(TAG, "scheduleCycleEnd")
         val now = SystemClock.elapsedRealtime()
@@ -236,9 +255,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
         val msNotificationInterval = lastCycleEnd + cyclePeriod - now
 
         if (msNotificationInterval <= 0) {
-            LogManager.d(TAG, "End of scan cycle");
-            lastCycleEnd = now
-            scanHelper.getCycledLeScanCallback().onCycleEnd()
+            endCycle(now)
         }
 
         if (msProcessingInterval > 0 || msNotificationInterval > 0) {
@@ -412,5 +429,11 @@ class IntentScanStrategyCoordinator(val context: Context) {
             }
             return if (regions.isEmpty()) null else ArrayList(regions)
         }
+
+        /**
+         * How long a broadcast that closes an overdue cycle waits for its batch to be processed.
+         * Well within the time Android allows a broadcast receiver.
+         */
+        private const val SCAN_PROCESSING_TIMEOUT_MILLIS = 1000L
     }
 }
