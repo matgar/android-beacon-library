@@ -6,8 +6,11 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageItemInfo
 import android.content.pm.PackageManager
 import android.os.Build
@@ -47,6 +50,19 @@ class IntentScanStrategyCoordinator(val context: Context) {
     private val scanCommandExecutor = Executors.newSingleThreadExecutor()
 
     @Volatile private var bleScanRunning = false
+
+    // A scan that could not start, or that died, while Bluetooth was not on is started again as
+    // soon as Bluetooth is on, instead of waiting for the next periodic job.
+    private var bluetoothStateReceiverRegistered = false
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            if (state == BluetoothAdapter.STATE_ON && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                LogManager.d(TAG, "Bluetooth is on: restarting background scan")
+                submitStartScanForRegisteredSetup()
+            }
+        }
+    }
 
     // Runs the blocking startScan IPC off the calling thread.  On Android 13+ the Bluetooth stack
     // is a Mainline/APEX module and startScan blocks the caller on a synchronous IPC; doing it on
@@ -176,6 +192,17 @@ class IntentScanStrategyCoordinator(val context: Context) {
         scanHelper.reloadParsers()
         LogManager.d(TAG, "starting background scan")
         submitStartScanForRegisteredSetup()
+        if (!bluetoothStateReceiverRegistered) {
+            try {
+                // A system broadcast, so no RECEIVER_EXPORTED flag is needed on Android 14+. Should
+                // a device disagree, the periodic job still restarts the scan.
+                context.applicationContext.registerReceiver(bluetoothStateReceiver,
+                        IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED))
+                bluetoothStateReceiverRegistered = true
+            } catch (e: SecurityException) {
+                LogManager.w(e, TAG, "Cannot listen for bluetooth state changes")
+            }
+        }
 //        lastCycleEnd = System.currentTimeMillis()
         ScanJobScheduler.getInstance().scheduleForIntentScanStrategy(context)
     }
@@ -214,6 +241,14 @@ class IntentScanStrategyCoordinator(val context: Context) {
     fun stop() {
         ensureInitialized()
         LogManager.d(TAG, "stopping background scan")
+        if (bluetoothStateReceiverRegistered) {
+            try {
+                context.applicationContext.unregisterReceiver(bluetoothStateReceiver)
+            } catch (e: IllegalArgumentException) {
+                // not registered after all
+            }
+            bluetoothStateReceiverRegistered = false
+        }
         submitStopScan()
         ScanJobScheduler.getInstance().cancelSchedule(context)
         started = false

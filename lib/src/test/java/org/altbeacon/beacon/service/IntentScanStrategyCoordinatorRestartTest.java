@@ -2,7 +2,10 @@ package org.altbeacon.beacon.service;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.le.BluetoothLeScanner;
+import android.app.Application;
 import android.content.Context;
+import android.content.Intent;
+import android.os.Looper;
 
 import org.junit.After;
 import org.junit.Before;
@@ -93,6 +96,59 @@ public class IntentScanStrategyCoordinatorRestartTest {
         coordinator.performPeriodicProcessing(context);
         drainScanCommands();
         assertTrue("no scan PendingIntent should be registered", pendingIntentScans().isEmpty());
+    }
+
+    @Test
+    public void bluetoothTurningOnStartsTheScan() throws Exception {
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_OFF);
+        coordinator.start();
+        coordinator.start(); // a second consumer binding: still one receiver
+        drainScanCommands();
+        assertTrue("no scan should start with Bluetooth not on", pendingIntentScans().isEmpty());
+        assertEquals("one Bluetooth state receiver should be registered", 1, stateReceivers());
+
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_ON);
+        sendBluetoothState(BluetoothAdapter.STATE_ON);
+        drainScanCommands();
+
+        onlyPendingIntentScan();
+    }
+
+    @Test
+    public void otherBluetoothStatesDoNotRestartTheScan() throws Exception {
+        coordinator.start();
+        drainScanCommands();
+        ShadowBluetoothLeScanner.ScanParams running = onlyPendingIntentScan();
+
+        sendBluetoothState(BluetoothAdapter.STATE_TURNING_ON);
+        drainScanCommands();
+
+        assertSame("the scan should not have been restarted", running, onlyPendingIntentScan());
+    }
+
+    @Test
+    public void bluetoothTurningOnAfterStopDoesNothing() throws Exception {
+        coordinator.start();
+        coordinator.stop();
+        drainScanCommands();
+        assertEquals("no Bluetooth state receiver should be left", 0, stateReceivers());
+
+        sendBluetoothState(BluetoothAdapter.STATE_ON);
+        drainScanCommands();
+
+        assertTrue("no scan should be registered after stop", pendingIntentScans().isEmpty());
+    }
+
+    private void sendBluetoothState(int state) {
+        Intent intent = new Intent(BluetoothAdapter.ACTION_STATE_CHANGED);
+        intent.putExtra(BluetoothAdapter.EXTRA_STATE, state);
+        context.sendBroadcast(intent);
+        shadowOf(Looper.getMainLooper()).idle();
+    }
+
+    private int stateReceivers() {
+        return shadowOf((Application) context)
+                .getReceiversForIntent(new Intent(BluetoothAdapter.ACTION_STATE_CHANGED)).size();
     }
 
     /** Waits for the scan start and stop commands submitted so far to run. */
