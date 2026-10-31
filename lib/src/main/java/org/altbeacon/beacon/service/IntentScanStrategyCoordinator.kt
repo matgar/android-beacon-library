@@ -54,6 +54,13 @@ class IntentScanStrategyCoordinator(val context: Context) {
     private fun submitStartScan(parsers: Set<BeaconParser>, regions: List<Region>?) {
         scanCommandExecutor.execute {
             try {
+                // Neither stop nor start unless Bluetooth is fully on. A scan already running keeps
+                // delivering results with Bluetooth off (#1148), while a new one cannot start until
+                // it is on again: stopping first would leave no scan at all.
+                if (!isBluetoothOn()) {
+                    LogManager.i(TAG, "Not starting background scan because bluetooth is not on")
+                    return@execute
+                }
                 if (bleScanRunning) {
                     scanHelper.stopAndroidOBackgroundScan()
                     bleScanRunning = false
@@ -67,6 +74,16 @@ class IntentScanStrategyCoordinator(val context: Context) {
             } catch (t: Throwable) {
                 LogManager.e(TAG, "Failed to start background scan off the calling thread", t)
             }
+        }
+    }
+
+    private fun isBluetoothOn(): Boolean {
+        return try {
+            val manager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager?
+            manager?.adapter?.state == BluetoothAdapter.STATE_ON
+        } catch (e: SecurityException) {
+            LogManager.w(TAG, "SecurityException checking if bluetooth is on")
+            false
         }
     }
 
