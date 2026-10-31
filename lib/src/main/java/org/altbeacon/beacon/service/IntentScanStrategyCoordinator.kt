@@ -1,6 +1,7 @@
 package org.altbeacon.beacon.service
 
 import android.annotation.SuppressLint
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
@@ -317,7 +318,13 @@ class IntentScanStrategyCoordinator(val context: Context) {
 
                 if (adapter != null) {
                     val scanner: BluetoothLeScanner? = adapter.getBluetoothLeScanner()
-                    if (scanner != null) {
+                    // Checked after the sleep, right before starting. In BLE_ON (Bluetooth off,
+                    // "Bluetooth scanning" on) getState() reports STATE_OFF, and a scan started
+                    // there leaves an orphaned scanner registration that outlives the process and,
+                    // with enough of them, blocks scanning for every app on the device.
+                    if (adapter.state != BluetoothAdapter.STATE_ON) {
+                        LogManager.d(TAG, "Bluetooth is not on.  Cannot run backup scan")
+                    } else if (scanner != null) {
                         val callback: ScanCallback = @RequiresApi(Build.VERSION_CODES.LOLLIPOP)
                         object : ScanCallback() {
                             override fun onScanResult(callbackType: Int, result: ScanResult) {

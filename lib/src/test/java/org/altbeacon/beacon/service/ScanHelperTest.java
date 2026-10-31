@@ -1,5 +1,6 @@
 package org.altbeacon.beacon.service;
 
+import android.bluetooth.BluetoothAdapter;
 import android.content.Context;
 
 import org.altbeacon.beacon.AltBeaconParser;
@@ -15,6 +16,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowBluetoothLeScanner;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -27,6 +29,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
+import static org.robolectric.Shadows.shadowOf;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
@@ -245,5 +248,43 @@ public class ScanHelperTest {
         scanHelper.reconcileParsers();
         assertEquals("reconciling again should not change the parser set", first,
                 scanHelper.getBeaconParsers());
+    }
+
+    @Test
+    public void backgroundScanDoesNotStartInBleOnlyMode() {
+        // In BLE_ON (Bluetooth off, "Bluetooth scanning" on) getState() reports STATE_OFF.
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_OFF);
+        new ScanHelper(context).startAndroidOBackgroundScan(registeredParsers());
+        assertEquals("no scan PendingIntent should be registered", 0, pendingIntentScans(adapter));
+    }
+
+    @Test
+    public void backgroundScanStillStopsWithBluetoothOff() {
+        // A scan already started keeps delivering results with Bluetooth off (#1148), so stopping
+        // must not depend on the adapter state.
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_ON);
+        ScanHelper scanHelper = new ScanHelper(context);
+        scanHelper.startAndroidOBackgroundScan(registeredParsers());
+        assertEquals("the scan PendingIntent should be registered", 1, pendingIntentScans(adapter));
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_OFF);
+        scanHelper.stopAndroidOBackgroundScan();
+        assertEquals("the scan PendingIntent should be stopped", 0, pendingIntentScans(adapter));
+    }
+
+    private Set<BeaconParser> registeredParsers() {
+        return new HashSet<>(BeaconManager.getInstanceForApplication(context).getBeaconParsers());
+    }
+
+    private static int pendingIntentScans(BluetoothAdapter adapter) {
+        int count = 0;
+        for (ShadowBluetoothLeScanner.ScanParams params :
+                shadowOf(adapter.getBluetoothLeScanner()).getActiveScans()) {
+            if (params.pendingIntent() != null) {
+                count++;
+            }
+        }
+        return count;
     }
 }

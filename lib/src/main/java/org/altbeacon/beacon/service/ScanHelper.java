@@ -272,8 +272,11 @@ class ScanHelper {
             BluetoothAdapter bluetoothAdapter = bluetoothManager.getAdapter();
             if (bluetoothAdapter == null) {
                 LogManager.w(TAG, "Failed to construct a BluetoothAdapter");
-            } else if (!bluetoothAdapter.isEnabled() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-                LogManager.w(TAG, "Failed to start background scan on Android O: BluetoothAdapter is not enabled");
+            } else if (bluetoothAdapter.getState() != BluetoothAdapter.STATE_ON) {
+                // Starting needs Bluetooth fully on, on every Android version, while stopping does
+                // not (see stopAndroidOBackgroundScan). In BLE_ON, where getState() reports
+                // STATE_OFF, this scan would only fail with a SecurityException.
+                LogManager.w(TAG, "Failed to start background scan on Android O: BluetoothAdapter is not on");
             } else {
                 BluetoothLeScanner scanner = bluetoothAdapter.getBluetoothLeScanner();
                 if (scanner != null) {

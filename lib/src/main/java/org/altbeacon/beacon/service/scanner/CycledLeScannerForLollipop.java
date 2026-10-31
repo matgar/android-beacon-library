@@ -169,8 +169,14 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
 
     @Override
     protected void startScan() {
-        if (!isBluetoothOn() && Build.VERSION.SDK_INT < Build.VERSION_CODES.P) {
-            LogManager.d(TAG, "Not starting scan because bluetooth is off");
+        // Unlike stopping, starting needs Bluetooth fully on, on every Android version. With
+        // Bluetooth off but "Bluetooth scanning" enabled the adapter is in BLE_ON, where
+        // getState() reports STATE_OFF: the stack accepts the scanner registration, then refuses
+        // to start the scan without BLUETOOTH_PRIVILEGED, and the registration is left behind.
+        // It survives the process and, once 32 of them pile up, blocks scanning for every app on
+        // the device until the Bluetooth stack restarts.
+        if (!isBluetoothOn()) {
+            LogManager.d(TAG, "Not starting scan because bluetooth is not on");
             return;
         }
         List<ScanFilter> filters = new ArrayList<ScanFilter>();
@@ -258,6 +264,12 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                         LogManager.d(TAG, "Scanning already started stopping to avoid start failure.");
                         scanner.stopScan(scanCallback);
                         mScanningStarted = false;
+                    }
+                    // Checked again here, on the scan thread, right before starting: the state
+                    // may have changed since startScan() posted this.
+                    if (!isBluetoothOn()) {
+                        LogManager.d(TAG, "Not starting scan because bluetooth is no longer on");
+                        return;
                     }
                     scanner.startScan(filters, settings, scanCallback);
                     mScanningStarted = true;
