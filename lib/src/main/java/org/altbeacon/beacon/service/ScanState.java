@@ -48,8 +48,17 @@ public class ScanState implements Serializable {
     private long mForegroundScanPeriod;
     private long mBackgroundScanPeriod;
     private boolean mBackgroundMode;
+    // Whether the app runs the intent scan strategy. A process woken from cold has no
+    // IntentScanStrategyCoordinator until the app configures the library again, so this is the
+    // only way a ScanJob running in it can tell that the scan PendingIntent belongs to that
+    // strategy and must not be cancelled.
+    private boolean mIntentScanStrategyEnabled;
     private long mLastScanStartTimeMillis = 0l;
     private transient Context mContext;
+
+    public boolean getIntentScanStrategyEnabled() {
+        return mIntentScanStrategyEnabled;
+    }
 
     public Boolean getBackgroundMode() {
         return mBackgroundMode;
@@ -269,6 +278,7 @@ public class ScanState implements Serializable {
         mBackgroundScanPeriod = beaconManager.getBackgroundScanPeriod();
         mBackgroundBetweenScanPeriod = beaconManager.getBackgroundBetweenScanPeriod();
         mBackgroundMode = beaconManager.getBackgroundMode();
+        mIntentScanStrategyEnabled = beaconManager.getIntentScanStrategyCoordinator() != null;
 
         ArrayList<Region> existingMonitoredRegions = new ArrayList<>(mMonitoringStatus.regions());
         ArrayList<Region> existingRangedRegions = new ArrayList<>(mRangedRegionState.keySet());
