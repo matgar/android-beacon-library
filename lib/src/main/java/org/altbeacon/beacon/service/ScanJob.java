@@ -51,6 +51,7 @@ public class ScanJob extends JobService {
      */
     private static int sOverrideImmediateScanJobId = -1;
     private static int sOverridePeriodicScanJobId = -1;
+    private static final long QUEUED_RESULT_PROCESSING_TIMEOUT_MILLIS = 1000;
 
     @Nullable
     private ScanState mScanState = null;
@@ -112,6 +113,23 @@ public class ScanJob extends JobService {
                     }
                 }
                 LogManager.d(TAG, "Done processing queued scan results");
+
+                if (mScanState != null && mScanState.getIntentScanStrategyEnabled()) {
+                    // The app runs the intent scan strategy, but this process has no coordinator
+                    // yet: it was woken from cold and the app has not configured the library. The
+                    // scan PendingIntent is the coordinator's, so leave it alone. Cancelling it to
+                    // run a cycled scan, as below, left the device with no scan at all when the
+                    // process died before the job could start it again, which low-memory devices
+                    // do within a second. Results arrive through that PendingIntent anyway; this
+                    // job only keeps the ones queued while no coordinator was there.
+                    LogManager.i(TAG, "Intent scan strategy without coordinator: keeping queued scan results only");
+                    if (mScanHelper != null && !mScanHelper.awaitScanProcessing(QUEUED_RESULT_PROCESSING_TIMEOUT_MILLIS)) {
+                        LogManager.w(TAG, "Queued scan results still processing; saving scan state without them");
+                    }
+                    mScanState.save();
+                    ScanJob.this.jobFinished(jobParameters, false);
+                    return;
+                }
 
                 // This syncronized block is around the scan start.
                 // Without it, it is possilbe that onStopJob is called in another thread and
@@ -235,8 +253,14 @@ public class ScanJob extends JobService {
                 return false;
             }
 
-            stopScanning();
-            startPassiveScanIfNeeded();
+            if (mScanState != null && mScanState.getIntentScanStrategyEnabled()) {
+                // As in onStartJob: the scan PendingIntent belongs to the intent scan strategy.
+                LogManager.d(TAG, "ScanJob stopped for intent scan strategy without coordinator.");
+            }
+            else {
+                stopScanning();
+                startPassiveScanIfNeeded();
+            }
             if (mScanHelper != null) {
                 mScanHelper.terminateThreads();
             }
@@ -277,7 +301,8 @@ public class ScanJob extends JobService {
             scanHelper.setRangedRegionState(mScanState.getRangedRegionState());
             scanHelper.setBeaconParsers(mScanState.getBeaconParsers());
             scanHelper.setExtraDataBeaconTracker(mScanState.getExtraBeaconDataTracker());
-            if (scanHelper.getCycledScanner() == null) {
+            // With the intent scan strategy this job never scans, so it needs no cycled scanner.
+            if (!mScanState.getIntentScanStrategyEnabled() && scanHelper.getCycledScanner() == null) {
                 try {
                     scanHelper.createCycledLeScanner(mScanState.getBackgroundMode(), null);
                 }
