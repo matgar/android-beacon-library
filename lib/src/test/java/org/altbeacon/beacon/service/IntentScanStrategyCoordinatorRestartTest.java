@@ -16,8 +16,10 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowBluetoothLeScanner;
 import org.robolectric.shadows.ShadowLog;
+import org.robolectric.shadows.ShadowSystemClock;
 
 import java.lang.reflect.Field;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -78,6 +80,7 @@ public class IntentScanStrategyCoordinatorRestartTest {
         drainScanCommands();
         ShadowBluetoothLeScanner.ScanParams first = onlyPendingIntentScan();
 
+        advance(IntentScanStrategyCoordinator.MIN_PERIODIC_RESTART_INTERVAL_MILLIS);
         coordinator.performPeriodicProcessing(context);
         drainScanCommands();
         // The backup scan that the periodic job also starts waits 5 s: let it find Bluetooth off,
@@ -87,6 +90,25 @@ public class IntentScanStrategyCoordinatorRestartTest {
         ShadowBluetoothLeScanner.ScanParams restarted = onlyPendingIntentScan();
         assertNotSame("the scan should have been registered again", first, restarted);
         assertFalse("the restarted scan should be filtered", restarted.scanFilters().isEmpty());
+        coordinator.getExecutor().shutdown();
+        coordinator.getExecutor().awaitTermination(10, TimeUnit.SECONDS);
+    }
+
+    @Test
+    public void periodicJobLeavesAScanStartedMomentsAgo() throws Exception {
+        // A move to the foreground runs the periodic processing right next to the restart that
+        // applySettings() does: restarting again would only spend one of the few scan starts
+        // Android allows in 30 s.
+        coordinator.start();
+        drainScanCommands();
+        ShadowBluetoothLeScanner.ScanParams running = onlyPendingIntentScan();
+
+        advance(IntentScanStrategyCoordinator.MIN_PERIODIC_RESTART_INTERVAL_MILLIS - 1000);
+        coordinator.performPeriodicProcessing(context);
+        drainScanCommands();
+        shadowOf(adapter).setState(BluetoothAdapter.STATE_OFF); // let the backup scan end
+
+        assertSame("the scan should not have been restarted", running, onlyPendingIntentScan());
         coordinator.getExecutor().shutdown();
         coordinator.getExecutor().awaitTermination(10, TimeUnit.SECONDS);
     }
@@ -149,6 +171,10 @@ public class IntentScanStrategyCoordinatorRestartTest {
     private int stateReceivers() {
         return shadowOf((Application) context)
                 .getReceiversForIntent(new Intent(BluetoothAdapter.ACTION_STATE_CHANGED)).size();
+    }
+
+    private static void advance(long millis) {
+        ShadowSystemClock.advanceBy(Duration.ofMillis(millis));
     }
 
     /** Waits for the scan start and stop commands submitted so far to run. */

@@ -50,6 +50,8 @@ class IntentScanStrategyCoordinator(val context: Context) {
     private val scanCommandExecutor = Executors.newSingleThreadExecutor()
 
     @Volatile private var bleScanRunning = false
+    // SystemClock.elapsedRealtime() of the last scan start, or -1 before the first one.
+    @Volatile private var lastScanStartMillis = -1L
 
     // A scan that could not start, or that died, while Bluetooth was not on is started again as
     // soon as Bluetooth is on, instead of waiting for the next periodic job.
@@ -87,6 +89,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
                     scanHelper.startAndroidOBackgroundScan(parsers)
                 }
                 bleScanRunning = true
+                lastScanStartMillis = SystemClock.elapsedRealtime()
             } catch (t: Throwable) {
                 LogManager.e(TAG, "Failed to start background scan off the calling thread", t)
             }
@@ -339,8 +342,18 @@ class IntentScanStrategyCoordinator(val context: Context) {
                 // Bluetooth, and only start() and applySettings() would start it again, which a
                 // process in the background may not see for hours. Restart it on every periodic
                 // job, so that it is back within one job interval at worst.
-                LogManager.d(TAG, "restarting background scan from the periodic job")
-                submitStartScanForRegisteredSetup()
+                //
+                // Skip it when the scan was started moments ago. This also runs on every move to
+                // the foreground, right where applySettings() restarts the scan as well, and
+                // Android stops honoring scan starts from an app that starts more than five in
+                // 30 seconds.
+                val msSinceLastStart = SystemClock.elapsedRealtime() - lastScanStartMillis
+                if (lastScanStartMillis < 0 || msSinceLastStart >= MIN_PERIODIC_RESTART_INTERVAL_MILLIS) {
+                    LogManager.d(TAG, "restarting background scan from the periodic job")
+                    submitStartScanForRegisteredSetup()
+                } else {
+                    LogManager.d(TAG, "Not restarting background scan from the periodic job: started $msSinceLastStart ms ago")
+                }
             }
             // Use this opportunity to run a brief scan without a filter to see if we are able to
             // detect something without a filter.  This would be an indication that the filtered
@@ -476,6 +489,10 @@ class IntentScanStrategyCoordinator(val context: Context) {
 
     companion object {
         val TAG = "IntentScanCoord"
+
+        /** The periodic job does not restart a scan started more recently than this. */
+        @VisibleForTesting
+        const val MIN_PERIODIC_RESTART_INTERVAL_MILLIS = 60000L
 
         /**
          * The regions to build scan filters for, or null to build them from the beacon parsers
