@@ -40,6 +40,15 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
     private final PowerManager mPowerManager;
     private boolean mScanningStarted = false;
 
+    // After the scan fails with SCAN_FAILED_APPLICATION_REGISTRATION_FAILED, typically because all
+    // of the device's scanner slots are taken, starting again on the next cycle fails the same way
+    // and only spends CPU and battery. Hold off for a delay that doubles with each consecutive
+    // failure, up to a cap, until a scan delivers a result again.
+    static final long REGISTRATION_FAILURE_INITIAL_HOLD_OFF_MILLIS = 10000;
+    static final long REGISTRATION_FAILURE_MAX_HOLD_OFF_MILLIS = 5 * 60 * 1000;
+    private volatile int mConsecutiveRegistrationFailures = 0;
+    private volatile long mNoScanStartBeforeMillis = 0; // SystemClock.elapsedRealtime()
+
     public CycledLeScannerForLollipop(Context context, long scanPeriod, long betweenScanPeriod, boolean backgroundFlag, CycledLeScanCallback cycledLeScanCallback, BluetoothCrashResolver crashResolver) {
         super(context, scanPeriod, betweenScanPeriod, backgroundFlag, cycledLeScanCallback, crashResolver);
         mBeaconManager = BeaconManager.getInstanceForApplication(mContext);
@@ -177,6 +186,12 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
         // the device until the Bluetooth stack restarts.
         if (!isBluetoothOn()) {
             LogManager.d(TAG, "Not starting scan because bluetooth is not on");
+            return;
+        }
+        long holdOffMillis = mNoScanStartBeforeMillis - SystemClock.elapsedRealtime();
+        if (holdOffMillis > 0) {
+            LogManager.d(TAG, "Not starting scan for another %d ms after %d registration failures",
+                    holdOffMillis, mConsecutiveRegistrationFailures);
             return;
         }
         List<ScanFilter> filters = new ArrayList<ScanFilter>();
@@ -354,12 +369,31 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
         return mScanner;
     }
 
+    private void holdOffAfterRegistrationFailure() {
+        int failures = mConsecutiveRegistrationFailures + 1;
+        mConsecutiveRegistrationFailures = failures;
+        long holdOffMillis = REGISTRATION_FAILURE_INITIAL_HOLD_OFF_MILLIS;
+        for (int i = 1; i < failures && holdOffMillis < REGISTRATION_FAILURE_MAX_HOLD_OFF_MILLIS; i++) {
+            holdOffMillis *= 2;
+        }
+        holdOffMillis = Math.min(holdOffMillis, REGISTRATION_FAILURE_MAX_HOLD_OFF_MILLIS);
+        mNoScanStartBeforeMillis = SystemClock.elapsedRealtime() + holdOffMillis;
+        LogManager.w(TAG, "Holding off scan starts for %d ms after %d registration failures",
+                holdOffMillis, failures);
+    }
+
+    private void clearRegistrationFailures() {
+        mConsecutiveRegistrationFailures = 0;
+        mNoScanStartBeforeMillis = 0;
+    }
+
     private ScanCallback getNewLeScanCallback() {
         if (leScanCallback == null) {
             leScanCallback = new ScanCallback() {
                 @MainThread
                 @Override
                 public void onScanResult(int callbackType, ScanResult scanResult) {
+                    clearRegistrationFailures();
                     if (LogManager.isVerboseLoggingEnabled()) {
                         LogManager.d(TAG, "got record");
                         List<ParcelUuid> uuids = scanResult.getScanRecord().getServiceUuids();
@@ -380,6 +414,9 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                 @MainThread
                 @Override
                 public void onBatchScanResults(List<ScanResult> results) {
+                    if (!results.isEmpty()) {
+                        clearRegistrationFailures();
+                    }
                     LogManager.d(TAG, "got batch records");
                     for (ScanResult scanResult : results) {
                         mCycledLeScanCallback.onLeScan(scanResult.getDevice(),
@@ -407,6 +444,7 @@ public class CycledLeScannerForLollipop extends CycledLeScanner {
                                     TAG,
                                     "Scan failed: app cannot be registered"
                             );
+                            holdOffAfterRegistrationFailure();
                             break;
                         case SCAN_FAILED_FEATURE_UNSUPPORTED:
                             LogManager.e(
