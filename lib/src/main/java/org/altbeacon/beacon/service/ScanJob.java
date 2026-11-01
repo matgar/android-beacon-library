@@ -293,6 +293,13 @@ public class ScanJob extends JobService {
 
     // Returns false if ScanHelper cannot be initialized
     private boolean initialzeScanHelper() {
+        // The same instance gets onStartJob again while a run is still active. That run's helper
+        // has a cycled scanner of its own: replacing the helper without stopping it left the
+        // scanner cycling, out of reach of stopScanning() and onStopJob, until the process died.
+        if (mScanHelper != null) {
+            stopCycledScanning(mScanHelper);
+            mScanHelper.terminateThreads();
+        }
         mScanState = ScanState.restore(ScanJob.this);
         if (mScanState != null) {
             ScanHelper scanHelper = new ScanHelper(this);
