@@ -1,6 +1,8 @@
 package org.altbeacon.beacon.service
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
@@ -11,6 +13,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageInfo
 import android.content.pm.PackageItemInfo
 import android.content.pm.PackageManager
 import android.os.Build
@@ -79,6 +82,12 @@ class IntentScanStrategyCoordinator(val context: Context) {
                     LogManager.i(TAG, "Not starting background scan because bluetooth is not on")
                     return@execute
                 }
+                // Nor while a new scan would receive nothing: stopping first would replace a scan
+                // that still delivers with one that does not.
+                if (!canReceiveScanResultsNow()) {
+                    LogManager.i(TAG, "Not starting background scan because a scan started now would get no results: location access is missing, or allowed only while the app is in the foreground")
+                    return@execute
+                }
                 if (bleScanRunning) {
                     scanHelper.stopAndroidOBackgroundScan()
                     bleScanRunning = false
@@ -94,6 +103,56 @@ class IntentScanStrategyCoordinator(val context: Context) {
                 LogManager.e(TAG, "Failed to start background scan off the calling thread", t)
             }
         }
+    }
+
+    /**
+     * Whether a scan registered now would receive results. Since Android 10 an app needs
+     * ACCESS_FINE_LOCATION to receive Bluetooth LE scan results, unless it declares BLUETOOTH_SCAN
+     * with neverForLocation. Without ACCESS_BACKGROUND_LOCATION that access only holds while the
+     * app is in the foreground, and the Bluetooth stack checks it when the scan is registered: a
+     * scan registered from the background stays registered but never delivers a result, while one
+     * registered in the foreground keeps delivering after the app leaves it. Seen on a Galaxy A15
+     * (Android 15) with location allowed only while in use: the periodic job's restart logged
+     * "Permission denial: Need ACCESS_FINE_LOCATION permission to get scan results" and the scan
+     * got nothing for 8 minutes with a beacon in range.
+     */
+    private fun canReceiveScanResultsNow(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return true
+        }
+        if (scanPermissionDisavowsLocation) {
+            return true
+        }
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return false
+        }
+        if (context.checkSelfPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            return true
+        }
+        return isAppInForeground()
+    }
+
+    // Read once: the manifest does not change while the app is installed, and reading it is an IPC.
+    private val scanPermissionDisavowsLocation by lazy {
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && readScanPermissionDisavowsLocation()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.S)
+    private fun readScanPermissionDisavowsLocation(): Boolean {
+        return try {
+            val info = context.packageManager.getPackageInfo(context.packageName, PackageManager.GET_PERMISSIONS)
+            val index = info.requestedPermissions?.indexOf(Manifest.permission.BLUETOOTH_SCAN) ?: -1
+            index >= 0 && (info.requestedPermissionsFlags[index] and PackageInfo.REQUESTED_PERMISSION_NEVER_FOR_LOCATION) != 0
+        } catch (e: PackageManager.NameNotFoundException) {
+            false
+        }
+    }
+
+    private fun isAppInForeground(): Boolean {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager? ?: return false
+        val pid = android.os.Process.myPid()
+        val process = activityManager.runningAppProcesses?.firstOrNull { it.pid == pid } ?: return false
+        return process.importance <= ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
     }
 
     private fun isBluetoothOn(): Boolean {
