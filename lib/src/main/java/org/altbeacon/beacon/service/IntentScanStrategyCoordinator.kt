@@ -24,7 +24,8 @@ import java.util.concurrent.Executors
 class IntentScanStrategyCoordinator(val context: Context) {
     private lateinit var scanHelper: ScanHelper
     private lateinit var scanState: ScanState
-    private var initialized = false
+    @Volatile private var initialized = false
+    private val initializationLock = Any()
     private var started = false
     private var longScanForcingEnabled = false
     private var lastCycleEnd: Long = 0
@@ -90,19 +91,33 @@ class IntentScanStrategyCoordinator(val context: Context) {
     private val cyclePeriod
         get() = scanPeriod + betweenScanPeriod
 
+    // The library enters this class from the main thread (scan broadcasts, foreground transitions),
+    // from the scan job's own thread, and from whatever thread the app starts ranging on. An entry
+    // made while another thread is still initializing must wait for it, not carry on with a half
+    // initialized coordinator: that crashed with a null monitoring status in runBackupScan, or
+    // with scanHelper or scanState not yet initialized. So initialized only turns true once
+    // everything is assigned, and is volatile so that seeing it true also means seeing them.
     fun ensureInitialized() {
-        if (!initialized) {
-            initialized = true
-            scanHelper = ScanHelper(context)
-            reinitialize()
+        if (initialized) {
+            return
+        }
+        synchronized(initializationLock) {
+            if (!initialized) {
+                scanHelper = ScanHelper(context)
+                loadScanState()
+                initialized = true
+            }
         }
     }
     fun reinitialize() {
         if (!initialized) {
-            ensureInitialized() // this will call reinitialize
+            ensureInitialized() // this loads the scan state
             return
         }
+        loadScanState()
+    }
 
+    private fun loadScanState() {
         var newScanState = ScanState.restore(context)
         if (newScanState == null) {
             newScanState = ScanState(context)
@@ -137,6 +152,7 @@ class IntentScanStrategyCoordinator(val context: Context) {
     }
 
     fun applySettings() {
+        ensureInitialized()
         scanState.applyChanges(BeaconManager.getInstanceForApplication(context))
         reinitialize()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
