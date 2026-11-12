@@ -1,8 +1,6 @@
 package org.altbeacon.beacon.service;
 
 import android.os.SystemClock;
-import androidx.annotation.RestrictTo;
-import androidx.annotation.RestrictTo.Scope;
 
 import org.altbeacon.beacon.logging.LogManager;
 
@@ -87,7 +85,6 @@ public class RunningAverageRssiFilter implements RssiFilter {
         sampleExpirationMilliseconds = newSampleExpirationMilliseconds;
     }
 
-    @RestrictTo(Scope.TESTS)
     static long getSampleExpirationMilliseconds() {
         return sampleExpirationMilliseconds;
     }

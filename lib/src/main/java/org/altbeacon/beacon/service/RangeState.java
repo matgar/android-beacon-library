@@ -96,8 +96,21 @@ public class RangeState implements Serializable {
                         }
                     }
                     // If we still have useful measurements, keep it around but mark it as not
-                    // tracked anymore so we don't pass it on as visible unless it is seen again
-                    if (!rangedBeacon.noMeasurementsAvailable() == true) {
+                    // tracked anymore so we don't pass it on as visible unless it is seen again.
+                    //
+                    // The filter only expires its samples when it calculates, which happens in
+                    // commitMeasurements above, for tracked beacons only. Once untracked, a beacon
+                    // that is never seen again keeps its last samples forever, so judge an
+                    // untracked one by when it was last seen, against the same expiration the
+                    // filter uses. With the default filter that is the same test, made without
+                    // relying on the filter to have expired anything; with a filter that never
+                    // reports running out of measurements, it is the only one. A negative age
+                    // comes from a range state restored from an earlier boot, where
+                    // elapsedRealtime started over, so it is just as stale.
+                    long trackingAge = rangedBeacon.getTrackingAge();
+                    if (!rangedBeacon.noMeasurementsAvailable()
+                            && trackingAge >= 0
+                            && trackingAge < RunningAverageRssiFilter.getSampleExpirationMilliseconds()) {
                         //if TrackingCache is enabled, allow beacon to not receive
                         //measurements for a certain amount of time
                         if (!sUseTrackingCache || rangedBeacon.isExpired())
