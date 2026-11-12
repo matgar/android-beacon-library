@@ -1,6 +1,7 @@
 package org.altbeacon.beacon.service;
 
 import android.content.Context;
+import android.os.SystemClock;
 
 import org.altbeacon.beacon.Beacon;
 import org.altbeacon.beacon.MonitorNotifier;
@@ -45,6 +46,18 @@ public class MonitoringStatus {
     private volatile File mStatusPreservationFile;
 
     private final Object mStatusPreservationFileLock = new Object();
+
+    /**
+     * The status file's timestamp is refreshed at most this often. See
+     * {@link #refreshMonitoringStatusTime()}.
+     */
+    private static final long STATUS_TIME_REFRESH_INTERVAL_MILLIS = 60 * 1000;
+
+    /**
+     * elapsedRealtime before which the timestamp is not refreshed again. Starts at zero, so the
+     * first refresh in a process always writes.
+     */
+    private long mNextStatusTimeRefreshElapsed = 0;
 
     /**
      * Private lock object for singleton initialization protecting against denial-of-service attack.
@@ -158,7 +171,7 @@ public class MonitoringStatus {
             saveMonitoringStatusIfOn();
         }
         else {
-            updateMonitoringStatusTime(System.currentTimeMillis());
+            refreshMonitoringStatusTime();
         }
     }
 
@@ -198,7 +211,7 @@ public class MonitoringStatus {
             saveMonitoringStatusIfOn();
         }
         else {
-            updateMonitoringStatusTime(System.currentTimeMillis());
+            refreshMonitoringStatusTime();
         }
     }
 
@@ -303,6 +316,24 @@ public class MonitoringStatus {
         }
 
         return file;
+    }
+
+    /**
+     * The timestamp only tells the next process whether the saved state is recent enough to
+     * restore, within MAX_STATUS_PRESERVATION_FILE_AGE_TO_RESTORE_SECS (15 minutes), and the
+     * state itself is written whenever it changes. Refreshing it was a File.setLastModified call
+     * at every scan cycle end and for every beacon processed, which cost 3-4% of the process's
+     * CPU. A timestamp up to a minute old makes no difference to that decision.
+     *
+     * Callers are synchronized on this instance.
+     */
+    private void refreshMonitoringStatusTime() {
+        long now = SystemClock.elapsedRealtime();
+        if (now < mNextStatusTimeRefreshElapsed) {
+            return;
+        }
+        mNextStatusTimeRefreshElapsed = now + STATUS_TIME_REFRESH_INTERVAL_MILLIS;
+        updateMonitoringStatusTime(System.currentTimeMillis());
     }
 
     protected void updateMonitoringStatusTime(long time) {
