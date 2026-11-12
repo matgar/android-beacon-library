@@ -78,6 +78,9 @@ public class BeaconParser implements Serializable {
     protected Boolean mAllowPduOverflow = true;
     protected String mIdentifier;
     protected int[] mHardwareAssistManufacturers = new int[] { 0x004c };
+    // Negative so that its default is the behavior: deserialization does not run field
+    // initializers, so a parser restored from data written without this field reads it as false.
+    private boolean mBluetoothNameReadingDisabled;
 
     protected List<BeaconParser> extraParsers = new ArrayList<BeaconParser>();
 
@@ -382,6 +385,30 @@ public class BeaconParser implements Serializable {
      */
     public void setAllowPduOverflow(Boolean enabled) {
         mAllowPduOverflow = enabled;
+    }
+
+    /**
+     * Beacons decoded by this parser report the device's Bluetooth name through
+     * {@link Beacon#getBluetoothName()}. Reading it is a call to the Bluetooth service for every
+     * packet decoded, so a parser whose beacons do not need the name can turn it off; they then
+     * report a null name. Defaults to true.
+     *
+     * Set it before registering the parser: the setting is not part of {@link #equals(Object)},
+     * so a registered parser changed afterwards is not seen as a change. It is saved with the
+     * parser, so a scan state restored from disk keeps it.
+     *
+     * @param enabled false to stop reading the Bluetooth name
+     */
+    public void setBluetoothNameReadingEnabled(boolean enabled) {
+        mBluetoothNameReadingDisabled = !enabled;
+    }
+
+    /**
+     * @see #setBluetoothNameReadingEnabled(boolean)
+     * @return whether beacons decoded by this parser read the device's Bluetooth name
+     */
+    public boolean isBluetoothNameReadingEnabled() {
+        return !mBluetoothNameReadingDisabled;
     }
 
     /**
@@ -719,11 +746,13 @@ public class BeaconParser implements Serializable {
             String name = null;
             if (device != null) {
                 macAddress = device.getAddress();
-                try {
-                  name = device.getName();
-                }
-                catch (SecurityException e) {
-                  LogManager.d(TAG,"Cannot read device name without Manifest.permission.BLUETOOTH_CONNECT");
+                if (!mBluetoothNameReadingDisabled) {
+                    try {
+                      name = device.getName();
+                    }
+                    catch (SecurityException e) {
+                      LogManager.d(TAG,"Cannot read device name without Manifest.permission.BLUETOOTH_CONNECT");
+                    }
                 }
             }
 
