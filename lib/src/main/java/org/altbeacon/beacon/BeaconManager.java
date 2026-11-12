@@ -143,6 +143,7 @@ public class BeaconManager {
     private IntentScanStrategyCoordinator mIntentScanStrategyCoordinator = null;
     private static boolean sAndroidLScanningDisabled = false;
     private static boolean sManifestCheckingDisabled = false;
+    private static volatile boolean sAutomaticBackgroundPowerSaverEnabled = true;
 
     @Nullable
     private Notification mForegroundServiceNotification = null;
@@ -1947,6 +1948,34 @@ public class BeaconManager {
         return sManifestCheckingDisabled;
     }
 
+    /**
+     * The ranging and monitoring methods create a background power saver the first time they
+     * run. It follows the app's lifecycle to switch between the foreground and background scan
+     * periods, and on creation infers the initial mode. Its observer is registered from the main
+     * thread, and every lifecycle transition that changes the mode applies the new scan periods
+     * from there. An app that does not need this, because its foreground and background periods
+     * are the same or because it sets the mode itself with {@link #setBackgroundMode(boolean)},
+     * can turn it off; nothing is then registered with ProcessLifecycleOwner or posted to the
+     * main thread, and the mode stays foreground unless the app sets it.
+     *
+     * Call it before the first ranging or monitoring call: a power saver already created stays.
+     * Defaults to true.
+     *
+     * @param enabled false to not create the background power saver
+     */
+    public static void setAutomaticBackgroundPowerSaverEnabled(boolean enabled) {
+        LogManager.d(TAG, "API setAutomaticBackgroundPowerSaverEnabled "+enabled);
+        sAutomaticBackgroundPowerSaverEnabled = enabled;
+    }
+
+    /**
+     * @see #setAutomaticBackgroundPowerSaverEnabled(boolean)
+     * @return whether the ranging and monitoring methods create a background power saver
+     */
+    public static boolean isAutomaticBackgroundPowerSaverEnabled() {
+        return sAutomaticBackgroundPowerSaverEnabled;
+    }
+
 
     /**
      * Configures the library to use a foreground service for bacon scanning.  This allows nearly
@@ -2116,6 +2145,9 @@ public class BeaconManager {
     @Nullable
     BackgroundPowerSaverInternal mInternalBackgroundPowerSaver = null;
     private void ensureBackgroundPowerSaver() {
+        if (!sAutomaticBackgroundPowerSaverEnabled) {
+            return;
+        }
         if (mInternalBackgroundPowerSaver == null) {
             mInternalBackgroundPowerSaver = new BackgroundPowerSaverInternal(mContext);
             mInternalBackgroundPowerSaver.enableDefaultBackgroundStateInference();
