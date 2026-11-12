@@ -34,6 +34,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.os.Build;
@@ -1812,7 +1813,17 @@ public class BeaconManager {
                 packageManager.queryIntentServices(intent,
                         PackageManager.MATCH_DEFAULT_ONLY);
         if (resolveInfo != null && resolveInfo.isEmpty()) {
-            throw new ServiceNotDeclaredException();
+            // The check is there for developers who removed the declaration, which shows up in
+            // development. In the field the library's merged manifest declares the service, and an
+            // empty result comes from the package manager failing for a moment, typically while
+            // the app is being updated, in a process the system woke for a scan job or a scan
+            // broadcast. Crashing there helps no one.
+            if ((mContext.getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                throw new ServiceNotDeclaredException();
+            }
+            LogManager.w(TAG, "The BeaconService was not found by the package manager. It is "
+                    + "declared by the library's manifest, so this is most likely a transient "
+                    + "package manager failure. Continuing.");
         }
     }
 
