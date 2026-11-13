@@ -37,6 +37,8 @@ import java.io.IOException;
 import java.io.Serializable;
 
 public class Callback implements Serializable {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
     private static final String TAG = "Callback";
 
     //TODO: Remove this constructor in favor of an empty one, as the package name is no longer needed

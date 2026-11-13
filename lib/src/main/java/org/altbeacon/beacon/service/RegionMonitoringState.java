@@ -31,6 +31,8 @@ import org.altbeacon.beacon.logging.LogManager;
 import java.io.Serializable;
 
 public class RegionMonitoringState implements Serializable {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
     private static final String TAG = RegionMonitoringState.class.getSimpleName();
     private boolean inside = false;
     private long lastSeenTime = 0l;

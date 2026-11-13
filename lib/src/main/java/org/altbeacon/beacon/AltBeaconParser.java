@@ -33,6 +33,8 @@ import android.util.Log;
  * {@link BeaconParser See BeaconParser for more information.}
  */
 public class AltBeaconParser extends BeaconParser {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
     public static final String TAG = "AltBeaconParser";
 
     /**

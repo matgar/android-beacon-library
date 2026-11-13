@@ -42,6 +42,8 @@ import java.util.ArrayList;
  * @author  David G. Young
  */
 public class AltBeacon extends Beacon {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
     private static final String TAG = "AltBeacon";
 
     /**

@@ -21,6 +21,8 @@ import java.util.regex.Pattern;
  * The value is internally this is stored as a byte array.
  */
 public class Identifier implements Comparable<Identifier>, Serializable {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
     private static final Pattern HEX_PATTERN = Pattern.compile("^0x[0-9A-Fa-f]*$");
     private static final Pattern HEX_PATTERN_NO_PREFIX = Pattern.compile("^[0-9A-Fa-f]*$");
     private static final Pattern DECIMAL_PATTERN = Pattern.compile("^0|[1-9][0-9]*$");

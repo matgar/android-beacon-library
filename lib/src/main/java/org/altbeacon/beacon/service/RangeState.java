@@ -33,6 +33,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 public class RangeState implements Serializable {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
     private static final String TAG = "RangeState";
     private Callback mCallback;
     private Map<Beacon,RangedBeacon> mRangedBeacons = new HashMap<Beacon,RangedBeacon>();

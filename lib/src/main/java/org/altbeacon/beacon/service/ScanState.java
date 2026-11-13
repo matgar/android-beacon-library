@@ -34,6 +34,13 @@ import static android.content.Context.MODE_PRIVATE;
  */
 
 public class ScanState implements Serializable {
+    // Fixed rather than computed, for this class and every class it serializes: ScanState, and
+    // the MonitoringStatus file, outlive app updates, and the computed value changes with any
+    // non-private member, so each release used to discard them. Change it, and the one of any
+    // class whose serialized fields are removed, renamed or retyped, by hand; a new field needs
+    // no change, as it reads back as the JVM default. ScanStateCompatibilityTest holds a state
+    // written by an earlier build. consumer-rules.pro keeps these names from being obfuscated.
+    private static final long serialVersionUID = 1L;
     private static final String TAG = ScanState.class.getSimpleName();
     private static final String STATUS_PRESERVATION_FILE_NAME = "android-beacon-library-scan-state";
     private static final String TEMP_STATUS_PRESERVATION_FILE_NAME = "android-beacon-library-scan-state-temp";

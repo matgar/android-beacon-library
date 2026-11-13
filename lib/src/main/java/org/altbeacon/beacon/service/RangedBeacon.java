@@ -10,6 +10,8 @@ import java.io.Serializable;
 import java.lang.reflect.Constructor;
 
 public class RangedBeacon implements Serializable {
+    // Fixed: this class is saved with ScanState. See there before changing it.
+    private static final long serialVersionUID = 1L;
 
     private static final String TAG = "RangedBeacon";
     public static final long DEFAULT_MAX_TRACKING_AGE = 5000; /* 5 Seconds */
