@@ -6,6 +6,7 @@ import android.bluetooth.le.ScanResult;
 import android.bluetooth.le.ScanRecord;
 import android.content.Context;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 
@@ -37,12 +38,18 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -51,9 +58,10 @@ import static org.mockito.Mockito.when;
 import static org.robolectric.Shadows.shadowOf;
 
 /**
- * Cycle ends of the intent scan strategy while the CPU sleeps between scan broadcasts. The main
- * looper is paused and never idled, so the handler that defers a cycle end never runs, as on a
- * device whose CPU goes back to sleep as soon as the broadcast receiver returns.
+ * Cycle ends of the intent scan strategy while the CPU sleeps between scan broadcasts. The
+ * deferred cycle end check is moved to the main looper, which is paused and never idled, so it
+ * never runs, as on a device whose CPU goes back to sleep as soon as the broadcast receiver
+ * returns. The tests of the deferred check itself put back the coordinator's own handler.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 28)
@@ -99,6 +107,7 @@ public class IntentScanStrategyCoordinatorCycleTest {
         coordinator = new IntentScanStrategyCoordinator(context);
         setField(coordinator, "scanHelper", scanHelper);
         setField(coordinator, "initialized", true);
+        setField(coordinator, "cycleEndHandler", new Handler(Looper.getMainLooper()));
 
         device = BluetoothAdapter.getDefaultAdapter().getRemoteDevice("00:11:22:33:44:55");
         // Start well past any cycle end, as on a device that has been up for a while.
@@ -188,6 +197,79 @@ public class IntentScanStrategyCoordinatorCycleTest {
         advance(2000);
         coordinator.performPeriodicProcessing(RuntimeEnvironment.getApplication());
         verify(cycleCallback, times(1)).onCycleEnd();
+    }
+
+    /**
+     * The deferred check closes a cycle nobody else closes -- results stop arriving while the CPU
+     * is awake -- and it does so off the main thread, which stays paused here throughout.
+     */
+    @Test
+    public void theDeferredCheckClosesTheCycleOffTheMainThread() throws Exception {
+        setField(coordinator, "cycleEndHandler", null);
+        List<Thread> closingThreads = Collections.synchronizedList(new ArrayList<Thread>());
+        doAnswer(invocation -> closingThreads.add(Thread.currentThread()))
+                .when(cycleCallback).onCycleEnd();
+
+        coordinator.processScanResults(batch());
+        Looper cycleEndLooper = cycleEndLooper();
+        shadowOf(cycleEndLooper).pause();
+        advance(20000);
+        shadowOf(cycleEndLooper).idle();
+
+        assertEquals("the batch closed one cycle, the deferred check the next", 2, closingThreads.size());
+        assertEquals("the first one on the caller's thread", Thread.currentThread(), closingThreads.get(0));
+        assertNotEquals("the second one off the main thread",
+                Looper.getMainLooper().getThread(), closingThreads.get(1));
+        assertEquals("on the cycle end thread", cycleEndLooper.getThread(), closingThreads.get(1));
+        assertTrue("and nothing was left for the main looper", shadowOf(Looper.getMainLooper()).isIdle());
+    }
+
+    /**
+     * A broadcast that finds the cycle overdue waits for its batch to be processed before closing
+     * it. The deferred check, coming due on its own thread meanwhile, must neither close the cycle
+     * without that batch nor close it a second time afterwards, empty.
+     */
+    @Test
+    public void theDeferredCheckWaitsForABroadcastClosingTheCycle() throws Exception {
+        setField(coordinator, "cycleEndHandler", null);
+        AtomicInteger cycleEnds = new AtomicInteger();
+        CountDownLatch deferredCheckClosed = new CountDownLatch(2);
+        doAnswer(invocation -> {
+            cycleEnds.incrementAndGet();
+            deferredCheckClosed.countDown();
+            return null;
+        }).when(cycleCallback).onCycleEnd();
+        coordinator.processScanResults(batch());
+        Looper cycleEndLooper = cycleEndLooper();
+        shadowOf(cycleEndLooper).pause();
+        advance(20000);
+
+        CountDownLatch broadcastWaiting = new CountDownLatch(1);
+        CountDownLatch batchProcessed = new CountDownLatch(1);
+        when(scanHelper.awaitScanProcessing(anyLong())).thenAnswer(invocation -> {
+            broadcastWaiting.countDown();
+            return batchProcessed.await(5, TimeUnit.SECONDS);
+        });
+        Thread broadcast = new Thread(() -> coordinator.processScanResults(batch()));
+        broadcast.start();
+        assertTrue(broadcastWaiting.await(5, TimeUnit.SECONDS));
+        Thread deferredCheck = new Thread(() -> shadowOf(cycleEndLooper).idle());
+        deferredCheck.start();
+
+        assertFalse("the deferred check must not close the cycle while the batch is processed",
+                deferredCheckClosed.await(500, TimeUnit.MILLISECONDS));
+        batchProcessed.countDown();
+        broadcast.join(5000);
+        deferredCheck.join(5000);
+
+        assertEquals("the first batch and the overdue broadcast closed one cycle each, the deferred check none",
+                2, cycleEnds.get());
+    }
+
+    private Looper cycleEndLooper() throws Exception {
+        Field field = IntentScanStrategyCoordinator.class.getDeclaredField("cycleEndHandler");
+        field.setAccessible(true);
+        return ((Handler) field.get(coordinator)).getLooper();
     }
 
     private ArrayList<ScanResult> batch() {

@@ -18,7 +18,7 @@ import android.content.pm.PackageItemInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Handler
-import android.os.Looper
+import android.os.HandlerThread
 import android.os.SystemClock
 import androidx.annotation.RequiresApi
 import androidx.annotation.VisibleForTesting
@@ -44,7 +44,18 @@ class IntentScanStrategyCoordinator(val context: Context) {
     var lastStrategyFailureDetectionCount = 0
     var disableOnFailure = false
     val executor = Executors.newFixedThreadPool(1)
-    private val handler = Handler(Looper.getMainLooper())
+    // Serializes every decision to close a cycle with the close itself. Cycles are closed by
+    // whoever calls processScanResults -- the scan broadcast on the main thread, the scan job, the
+    // backup scan -- and by the deferred check on the cycle end thread. Without it, two of them
+    // could both find the same cycle due and close it twice, the second time with no beacons in
+    // it, or the deferred check could close the cycle while a broadcast that found it overdue is
+    // still waiting for its batch to be processed, leaving that batch for the next cycle.
+    private val cycleLock = Any()
+    // Runs the deferred cycle end checks, once a second while scanning. It used to be the main
+    // looper, where each cycle end (range state finalization, ranging callbacks, monitoring
+    // status) competed with the app's UI. Created on first use, and kept for the life of the
+    // process, like the executors above.
+    private var cycleEndHandler: Handler? = null
 
     // Dedicated single-thread executor for BLE scan control (start/stop/restart).  Kept separate
     // from `executor`, which the backup scan can occupy for up to ~35s (sleep + detection loop).
@@ -348,6 +359,14 @@ class IntentScanStrategyCoordinator(val context: Context) {
         // registered set so decoding does not depend on which entry point initialized this
         // coordinator. Only the parsers are replaced; the extra data beacon tracker is kept.
         scanHelper.reconcileParsers()
+        synchronized(cycleLock) {
+            processScanResultsLocked(scanResults)
+        }
+        scheduleCycleEnd()
+    }
+
+    @RequiresApi(Build.VERSION_CODES.O)
+    private fun processScanResultsLocked(scanResults: ArrayList<ScanResult?>) {
         val now = SystemClock.elapsedRealtime()
         LogManager.d(TAG, "Processing scan results. lastArrival: $lastArrival. Setting to $now")
         lastArrival = now
@@ -378,7 +397,6 @@ class IntentScanStrategyCoordinator(val context: Context) {
             }
             endCycle(now)
         }
-        scheduleCycleEnd()
     }
 
     private fun endCycle(now: Long) {
@@ -389,23 +407,35 @@ class IntentScanStrategyCoordinator(val context: Context) {
 
     private fun scheduleCycleEnd() {
         LogManager.d(TAG, "scheduleCycleEnd")
-        val now = SystemClock.elapsedRealtime()
+        val interval: Long
+        synchronized(cycleLock) {
+            val now = SystemClock.elapsedRealtime()
 
-        val msProcessingInterval = lastArrival + scanPeriod - now
-        val msNotificationInterval = lastCycleEnd + cyclePeriod - now
+            val msProcessingInterval = lastArrival + scanPeriod - now
+            val msNotificationInterval = lastCycleEnd + cyclePeriod - now
 
-        if (msNotificationInterval <= 0) {
-            endCycle(now)
+            if (msNotificationInterval <= 0) {
+                endCycle(now)
+            }
+
+            if (msProcessingInterval <= 0 && msNotificationInterval <= 0) {
+                return
+            }
+            interval = lastCycleEnd + cyclePeriod - now
         }
+        LogManager.d(TAG, "Rescheduling scan cycle end check. interval: $interval")
+        val handler = cycleEndHandler()
+        handler.removeCallbacksAndMessages(null)
+        handler.postDelayed({
+            scheduleCycleEnd()
+        }, if (interval > 1000) 1000 else interval)
+    }
 
-        if (msProcessingInterval > 0 || msNotificationInterval > 0) {
-            val interval = lastCycleEnd + cyclePeriod - now
-            LogManager.d(TAG, "Rescheduling scan cycle end check. interval: $interval")
-            handler.removeCallbacksAndMessages(null)
-            handler.postDelayed({
-                scheduleCycleEnd()
-            }, if (interval > 1000) 1000 else interval)
-        }
+    @Synchronized
+    private fun cycleEndHandler(): Handler {
+        return cycleEndHandler ?: Handler(
+            HandlerThread("IntentScanCycleEnd").apply { start() }.looper
+        ).also { cycleEndHandler = it }
     }
 
     fun performPeriodicProcessing(context: Context) {
