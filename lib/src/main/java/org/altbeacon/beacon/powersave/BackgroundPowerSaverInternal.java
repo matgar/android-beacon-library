@@ -11,7 +11,9 @@ import android.os.Looper;
 import android.os.PowerManager;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 import androidx.lifecycle.DefaultLifecycleObserver;
+import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
 import androidx.lifecycle.ProcessLifecycleOwner;
 
@@ -79,12 +81,17 @@ public class BackgroundPowerSaverInternal implements DefaultLifecycleObserver {
      * called
      */
     public void enableDefaultBackgroundStateInference() {
+        enableDefaultBackgroundStateInference(ProcessLifecycleOwner.get());
+    }
+
+    @VisibleForTesting
+    void enableDefaultBackgroundStateInference(@NonNull LifecycleOwner processLifecycleOwner) {
         if (beaconManager.isBackgroundModeUninitialized()) {
             // the library will assume we are in foreground mode unless there is evidence to the contrary
             // this logic sequence looks for that evidence
-            if (methodCalledByApplicationOnCreate()) {
-                // if we were called by application.onCreate we know we are not yet in the foreground
-                inferBackground("application.onCreate in the call stack");
+            if (calledOnTheMainThreadBeforeAnyActivityStarted(processLifecycleOwner)) {
+                // if no activity has started yet, we know we are not yet in the foreground
+                inferBackground("no activity having started yet");
             } else {
                 PowerManager powerManager = (PowerManager) applicationContext.getSystemService(Context.POWER_SERVICE);
                 boolean screenOffNow = false;
@@ -113,6 +120,30 @@ public class BackgroundPowerSaverInternal implements DefaultLifecycleObserver {
             LogManager.i(TAG, "We have inferred by " + inferenceMechanism + " that we are in the background.");
             beaconManager.setBackgroundModeInternal(true);
         }
+    }
+
+    // The process lifecycle moves to CREATED before Application.onCreate runs, as soon as
+    // androidx.startup's ProcessLifecycleInitializer attaches it, and to STARTED only when an
+    // activity starts. So CREATED on the main thread covers a call from Application.onCreate, which
+    // used to be detected by walking the call stack, and also the calls made later but still before
+    // any activity started, which the walk could not detect.
+    //
+    // The walk was the cost: on slow devices, a deep stack walked from Application.onCreate on the
+    // main thread was the top frame of thousands of ANRs in an app's Play Console report. Only a
+    // lifecycle left INITIALIZED, in an app that removed the initializer, still needs it.
+    //
+    // Off the main thread nothing is read and nothing is walked: Application.onCreate only runs on
+    // the main thread, so the walk could never find it there, and the result is unchanged.
+    private boolean calledOnTheMainThreadBeforeAnyActivityStarted(
+            @NonNull LifecycleOwner processLifecycleOwner) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            return false;
+        }
+        Lifecycle.State state = processLifecycleOwner.getLifecycle().getCurrentState();
+        if (state == Lifecycle.State.INITIALIZED) {
+            return methodCalledByApplicationOnCreate();
+        }
+        return !state.isAtLeast(Lifecycle.State.STARTED);
     }
 
     // Sadly, Android APIs  give us no way of knowing if Application.onCreate has completed or if
